@@ -31,7 +31,6 @@ def save_state():
         "admin_password": st.session_state.get("admin_password", "2302"),
         "cycle_snapshots": st.session_state.get("cycle_snapshots", {}),
         "play_to": st.session_state.get("play_to", 9),
-        "score_history": st.session_state.get("score_history", {}),
     }
     try:
         with open(SAVE_FILE, "w") as f:
@@ -92,8 +91,6 @@ if "created" not in st.session_state:
     load_state()
 if "cycle_snapshots" not in st.session_state:
     st.session_state.cycle_snapshots = {}
-if "score_history" not in st.session_state:
-    st.session_state.score_history = {}
 
 # ---------- Top Admin Bar ----------
 c1, c2, c3 = st.columns([2, 2, 3])
@@ -250,7 +247,6 @@ Emma, 3.5""")
             st.session_state.cumulative = cumulative
             st.session_state.final_done = False
             st.session_state.cycle_snapshots = {}
-            st.session_state.score_history = {}
             save_state()
             st.rerun()
 
@@ -266,12 +262,49 @@ if st.session_state.get("created"):
 
     st.success(f"Cycle {st.session_state.cycle} of {num_cycles}")
 
-    # History
+    # ---------- HISTORY (clean version) ----------
     st.markdown("---")
     st.header("Full History")
 
     for idx, entry in enumerate(st.session_state.assignment_history):
-        st.subheader(entry["title"])
+        colh1, colh2 = st.columns([6, 1])
+        with colh1:
+            st.subheader(entry["title"])
+        with colh2:
+            if is_admin and entry["type"] == "rankings" and "End of Cycle" in entry["title"]:
+                try:
+                    cycle_num = int(entry["title"].split("Cycle ")[1].split(" ")[0])
+                    if st.button("Edit", key=f"edit_{cycle_num}_{idx}"):
+                        st.session_state[f"ask_pwd_for_edit_{cycle_num}"] = True
+                except Exception:
+                    pass
+
+        # Password check when editing previous cycle
+        if is_admin and entry["type"] == "rankings" and "End of Cycle" in entry["title"]:
+            try:
+                cycle_num = int(entry["title"].split("Cycle ")[1].split(" ")[0])
+                if st.session_state.get(f"ask_pwd_for_edit_{cycle_num}", False):
+                    pwd = st.text_input(f"Re-enter Admin Password to edit Cycle {cycle_num}", type="password", key=f"pwd_edit_{cycle_num}")
+                    if pwd:
+                        if pwd == st.session_state.admin_password:
+                            if str(cycle_num) in st.session_state.cycle_snapshots:
+                                snap = st.session_state.cycle_snapshots[str(cycle_num)]
+                                st.session_state.courts = copy.deepcopy(snap["courts"])
+                                st.session_state.schedules = copy.deepcopy(snap["schedules"])
+                                st.session_state.scores = copy.deepcopy(snap["scores"])
+                                st.session_state.cycle = cycle_num
+                                st.session_state.standings = None
+                                st.session_state.relevant_ties = None
+                                st.session_state.skinny_results = {}
+                                st.session_state.final_done = False
+                                st.session_state.assignment_history = st.session_state.assignment_history[:idx]
+                                st.session_state[f"ask_pwd_for_edit_{cycle_num}"] = False
+                                save_state()
+                                st.rerun()
+                        else:
+                            st.error("Wrong password")
+            except Exception:
+                pass
 
         if entry["type"] == "groups":
             cols = st.columns(num_courts)
@@ -302,42 +335,9 @@ if st.session_state.get("created"):
                     if rows:
                         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-        elif entry["type"] == "scores":
-            cycle_num = entry.get("cycle", "?")
-            st.markdown(f"**Cycle {cycle_num} Scores**")
-            if is_admin:
-                if st.button(f"Edit Cycle {cycle_num} Scores", key=f"edit_scores_{cycle_num}"):
-                    st.session_state[f"ask_pwd_edit_scores_{cycle_num}"] = True
+        st.markdown("")
 
-            if st.session_state.get(f"ask_pwd_edit_scores_{cycle_num}", False):
-                pwd = st.text_input(f"Re-enter Admin Password to edit Cycle {cycle_num}", type="password", key=f"pwd_sc_{cycle_num}")
-                if pwd:
-                    if pwd == st.session_state.admin_password:
-                        if str(cycle_num) in st.session_state.cycle_snapshots:
-                            snap = st.session_state.cycle_snapshots[str(cycle_num)]
-                            st.session_state.courts = copy.deepcopy(snap["courts"])
-                            st.session_state.schedules = copy.deepcopy(snap["schedules"])
-                            st.session_state.scores = copy.deepcopy(snap["scores"])
-                            st.session_state.cycle = int(cycle_num)
-                            st.session_state.standings = None
-                            st.session_state.relevant_ties = None
-                            st.session_state.skinny_results = {}
-                            st.session_state.final_done = False
-                            st.session_state.assignment_history = [e for e in st.session_state.assignment_history if e.get("cycle", 999) < int(cycle_num) or e["type"] == "groups"]
-                            st.session_state[f"ask_pwd_edit_scores_{cycle_num}"] = False
-                            save_state()
-                            st.rerun()
-                    else:
-                        st.error("Wrong password")
-
-            score_data = entry.get("data", {})
-            for cname in court_names:
-                st.markdown(f"**{cname}**")
-                for line in score_data.get(cname, []):
-                    st.write(line)
-            st.markdown("---")
-
-    # Current Scores
+    # ---------- CURRENT SCORES ----------
     if not st.session_state.get("final_done"):
         st.markdown("---")
         st.header(f"3. Scores – Cycle {st.session_state.cycle}")
@@ -438,35 +438,11 @@ if st.session_state.get("created"):
 
                 st.session_state.standings = standings
                 st.session_state.relevant_ties = relevant_ties
-
                 st.session_state.cycle_snapshots[str(st.session_state.cycle)] = {
                     "courts": copy.deepcopy(courts),
                     "schedules": copy.deepcopy(schedules),
                     "scores": copy.deepcopy(st.session_state.scores)
                 }
-
-                score_lines = {}
-                for cname in court_names:
-                    lines = []
-                    schedule = schedules[cname]
-                    for r_idx, rnd in enumerate(schedule):
-                        matches = [x for x in rnd if isinstance(x, tuple)]
-                        byes = [x for x in rnd if isinstance(x, str)]
-                        for m_idx, match in enumerate(matches):
-                            t1, t2 = match
-                            key = f"{cname}_r{r_idx}_m{m_idx}"
-                            s1, s2 = st.session_state.scores.get(key, (0, 0))
-                            lines.append(f"R{r_idx+1}: {t1[0]} & {t1[1]}  {s1} - {s2}  {t2[0]} & {t2[1]}")
-                        if byes:
-                            lines.append(f"R{r_idx+1} Bye: {', '.join(byes)}")
-                    score_lines[cname] = lines
-
-                st.session_state.assignment_history.append({
-                    "title": f"Cycle {st.session_state.cycle} Scores",
-                    "type": "scores",
-                    "cycle": st.session_state.cycle,
-                    "data": score_lines
-                })
                 save_state()
 
         if st.session_state.get("standings"):
