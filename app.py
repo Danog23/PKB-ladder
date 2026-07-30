@@ -198,8 +198,6 @@ Emma, 3.5""")
         else:
             players = sorted(players, key=lambda x: x["dupr"], reverse=True)
             total = len(players)
-
-            # Correct even distribution - extra players go to LOWER courts
             base = total // num_courts
             rem = total % num_courts
             sizes = [base + (1 if i >= num_courts - rem else 0) for i in range(num_courts)]
@@ -262,7 +260,7 @@ if st.session_state.get("created"):
 
     st.success(f"Cycle {st.session_state.cycle} of {num_cycles}")
 
-    # ---------- HISTORY (clean version) ----------
+    # History
     st.markdown("---")
     st.header("Full History")
 
@@ -279,7 +277,6 @@ if st.session_state.get("created"):
                 except Exception:
                     pass
 
-        # Password check when editing previous cycle
         if is_admin and entry["type"] == "rankings" and "End of Cycle" in entry["title"]:
             try:
                 cycle_num = int(entry["title"].split("Cycle ")[1].split(" ")[0])
@@ -337,8 +334,8 @@ if st.session_state.get("created"):
 
         st.markdown("")
 
-    # ---------- CURRENT SCORES ----------
-    if not st.session_state.get("final_done"):
+    # ---------- SCORES (only show if rankings not yet calculated) ----------
+    if not st.session_state.get("final_done") and not st.session_state.get("standings"):
         st.markdown("---")
         st.header(f"3. Scores – Cycle {st.session_state.cycle}")
         if not is_admin:
@@ -444,169 +441,171 @@ if st.session_state.get("created"):
                     "scores": copy.deepcopy(st.session_state.scores)
                 }
                 save_state()
+                st.rerun()
 
-        if st.session_state.get("standings"):
+    # Rankings + Skinny Singles + Movement
+    if st.session_state.get("standings") and not st.session_state.get("final_done"):
+        st.markdown("---")
+        st.header("Current Rankings (this cycle)")
+        cols = st.columns(num_courts)
+        for i, cname in enumerate(court_names):
+            with cols[i]:
+                st.subheader(cname)
+                data = [{"#": j+1, "Player": r["name"], "+/−": r["diff"], "Matches Won": r["wins"]} for j, r in enumerate(st.session_state.standings[cname])]
+                st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
+
+        if st.session_state.get("relevant_ties") and is_admin:
             st.markdown("---")
-            st.header("Current Rankings (this cycle)")
-            cols = st.columns(num_courts)
-            for i, cname in enumerate(court_names):
-                with cols[i]:
-                    st.subheader(cname)
-                    data = [{"#": j+1, "Player": r["name"], "+/−": r["diff"], "Matches Won": r["wins"]} for j, r in enumerate(st.session_state.standings[cname])]
-                    st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
+            st.header("Skinny Singles Required")
+            for cname, ties in st.session_state.relevant_ties.items():
+                st.subheader(cname)
+                for tie in ties:
+                    st.write(f"**{tie['zone']}** — tied at {tie['score']:+d}: {', '.join(tie['players'])}")
+                    st.write(f"Select exactly {tie['needed']} player(s):")
+                    selected = []
+                    cbs = st.columns(min(len(tie["players"]), 4))
+                    for i, p in enumerate(tie["players"]):
+                        with cbs[i % len(cbs)]:
+                            if st.checkbox(p, key=f"sk_{cname}_{tie['zone']}_{p}_{st.session_state.cycle}"):
+                                selected.append(p)
+                    if len(selected) == tie["needed"]:
+                        st.session_state.skinny_results[f"{cname}_{tie['zone']}"] = selected
+                        st.success(f"Selected: {', '.join(selected)}")
+                    elif len(selected) > tie["needed"]:
+                        st.warning(f"Select only {tie['needed']}")
+                    elif len(selected) > 0:
+                        st.warning(f"Select {tie['needed'] - len(selected)} more")
 
-            if st.session_state.get("relevant_ties") and is_admin:
-                st.markdown("---")
-                st.header("Skinny Singles Required")
-                for cname, ties in st.session_state.relevant_ties.items():
-                    st.subheader(cname)
-                    for tie in ties:
-                        st.write(f"**{tie['zone']}** — tied at {tie['score']:+d}: {', '.join(tie['players'])}")
-                        st.write(f"Select exactly {tie['needed']} player(s):")
-                        selected = []
-                        cbs = st.columns(min(len(tie["players"]), 4))
-                        for i, p in enumerate(tie["players"]):
-                            with cbs[i % len(cbs)]:
-                                if st.checkbox(p, key=f"sk_{cname}_{tie['zone']}_{p}_{st.session_state.cycle}"):
-                                    selected.append(p)
-                        if len(selected) == tie["needed"]:
-                            st.session_state.skinny_results[f"{cname}_{tie['zone']}"] = selected
-                            st.success(f"Selected: {', '.join(selected)}")
-                        elif len(selected) > tie["needed"]:
-                            st.warning(f"Select only {tie['needed']}")
-                        elif len(selected) > 0:
-                            st.warning(f"Select {tie['needed'] - len(selected)} more")
+        if is_admin:
+            st.markdown("---")
+            if st.session_state.cycle < num_cycles:
+                if st.button("Apply Movement & Start Next Cycle", type="primary"):
+                    ready = True
+                    if st.session_state.get("relevant_ties"):
+                        for cname, ties in st.session_state.relevant_ties.items():
+                            for tie in ties:
+                                key = f"{cname}_{tie['zone']}"
+                                if key not in st.session_state.skinny_results or len(st.session_state.skinny_results[key]) != tie["needed"]:
+                                    ready = False
+                                    st.error(f"Please finish skinny singles for {cname}")
+                    if not ready:
+                        st.stop()
 
-            if is_admin:
-                st.markdown("---")
-                if st.session_state.cycle < num_cycles:
-                    if st.button("Apply Movement & Start Next Cycle", type="primary"):
-                        ready = True
-                        if st.session_state.get("relevant_ties"):
-                            for cname, ties in st.session_state.relevant_ties.items():
-                                for tie in ties:
-                                    key = f"{cname}_{tie['zone']}"
-                                    if key not in st.session_state.skinny_results or len(st.session_state.skinny_results[key]) != tie["needed"]:
-                                        ready = False
-                                        st.error(f"Please finish skinny singles for {cname}")
-                        if not ready:
-                            st.stop()
+                    for cname, ranking in st.session_state.standings.items():
+                        for r in ranking:
+                            st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
+                            st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
 
-                        for cname, ranking in st.session_state.standings.items():
+                    st.session_state.assignment_history.append({
+                        "title": f"End of Cycle {st.session_state.cycle} (Final Rankings)",
+                        "type": "rankings",
+                        "data": st.session_state.standings
+                    })
+
+                    final_rankings = st.session_state.standings
+                    new_courts = {name: [] for name in court_names}
+                    display_data = {name: [] for name in court_names}
+                    movers_up = {name: [] for name in court_names}
+                    movers_down = {name: [] for name in court_names}
+
+                    for c_idx, cname in enumerate(court_names):
+                        ranking = final_rankings[cname]
+                        up_list = ranking[:2] if c_idx > 0 else []
+                        down_list = ranking[-2:] if c_idx < num_courts - 1 else []
+
+                        if f"{cname}_top (move up)" in st.session_state.skinny_results:
+                            selected_names = st.session_state.skinny_results[f"{cname}_top (move up)"]
+                            up_list = [r for r in ranking if r["name"] in selected_names]
                             for r in ranking:
-                                st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
-                                st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
+                                if (r["diff"], r["wins"]) > (ranking[1]["diff"], ranking[1]["wins"]) and r["name"] not in selected_names:
+                                    up_list.insert(0, r)
+                            up_list = up_list[:2]
 
-                        st.session_state.assignment_history.append({
-                            "title": f"End of Cycle {st.session_state.cycle} (Final Rankings)",
-                            "type": "rankings",
-                            "data": st.session_state.standings
-                        })
+                        if f"{cname}_bottom (move down)" in st.session_state.skinny_results:
+                            selected_names = st.session_state.skinny_results[f"{cname}_bottom (move down)"]
+                            down_list = [r for r in ranking if r["name"] in selected_names]
+                            for r in reversed(ranking):
+                                if (r["diff"], r["wins"]) < (ranking[-2]["diff"], ranking[-2]["wins"]) and r["name"] not in selected_names:
+                                    down_list.append(r)
+                            down_list = down_list[-2:]
 
-                        final_rankings = st.session_state.standings
-                        new_courts = {name: [] for name in court_names}
-                        display_data = {name: [] for name in court_names}
-                        movers_up = {name: [] for name in court_names}
-                        movers_down = {name: [] for name in court_names}
+                        if c_idx > 0:
+                            movers_up[cname] = up_list
+                        if c_idx < num_courts - 1:
+                            movers_down[cname] = down_list
 
-                        for c_idx, cname in enumerate(court_names):
-                            ranking = final_rankings[cname]
-                            up_list = ranking[:2] if c_idx > 0 else []
-                            down_list = ranking[-2:] if c_idx < num_courts - 1 else []
+                    for c_idx, cname in enumerate(court_names):
+                        ranking = final_rankings[cname]
+                        staying = []
+                        for r in ranking:
+                            is_up = any(r["name"] == m["name"] for m in movers_up[cname])
+                            is_down = any(r["name"] == m["name"] for m in movers_down[cname])
+                            if not is_up and not is_down:
+                                staying.append(r)
 
-                            if f"{cname}_top (move up)" in st.session_state.skinny_results:
-                                selected_names = st.session_state.skinny_results[f"{cname}_top (move up)"]
-                                up_list = [r for r in ranking if r["name"] in selected_names]
-                                for r in ranking:
-                                    if (r["diff"], r["wins"]) > (ranking[1]["diff"], ranking[1]["wins"]) and r["name"] not in selected_names:
-                                        up_list.insert(0, r)
-                                up_list = up_list[:2]
+                        incoming_down = movers_down.get(court_names[c_idx - 1], []) if c_idx > 0 else []
+                        incoming_up = movers_up.get(court_names[c_idx + 1], []) if c_idx < num_courts - 1 else []
 
-                            if f"{cname}_bottom (move down)" in st.session_state.skinny_results:
-                                selected_names = st.session_state.skinny_results[f"{cname}_bottom (move down)"]
-                                down_list = [r for r in ranking if r["name"] in selected_names]
-                                for r in reversed(ranking):
-                                    if (r["diff"], r["wins"]) < (ranking[-2]["diff"], ranking[-2]["wins"]) and r["name"] not in selected_names:
-                                        down_list.append(r)
-                                down_list = down_list[-2:]
+                        ordered = []
+                        for r in incoming_down:
+                            ordered.append({"Player": r["name"], "+/−": r["diff"], "Matches Won": r["wins"], "Note": f"(moved down from {court_names[c_idx-1]})"})
+                            for pl in courts[court_names[c_idx-1]]:
+                                if pl["name"] == r["name"]:
+                                    new_courts[cname].append(pl)
+                                    break
+                        for r in staying:
+                            ordered.append({"Player": r["name"], "+/−": r["diff"], "Matches Won": r["wins"], "Note": ""})
+                            for pl in courts[cname]:
+                                if pl["name"] == r["name"]:
+                                    new_courts[cname].append(pl)
+                                    break
+                        for r in incoming_up:
+                            ordered.append({"Player": r["name"], "+/−": r["diff"], "Matches Won": r["wins"], "Note": f"(moved up from {court_names[c_idx+1]})"})
+                            for pl in courts[court_names[c_idx+1]]:
+                                if pl["name"] == r["name"]:
+                                    new_courts[cname].append(pl)
+                                    break
+                        display_data[cname] = ordered
 
-                            if c_idx > 0:
-                                movers_up[cname] = up_list
-                            if c_idx < num_courts - 1:
-                                movers_down[cname] = down_list
+                    st.session_state.assignment_history.append({
+                        "title": f"Start of Cycle {st.session_state.cycle + 1} (After Movement)",
+                        "type": "new_groups",
+                        "data": display_data
+                    })
 
-                        for c_idx, cname in enumerate(court_names):
-                            ranking = final_rankings[cname]
-                            staying = []
-                            for r in ranking:
-                                is_up = any(r["name"] == m["name"] for m in movers_up[cname])
-                                is_down = any(r["name"] == m["name"] for m in movers_down[cname])
-                                if not is_up and not is_down:
-                                    staying.append(r)
+                    new_schedules = {c: generate_schedule(p) for c, p in new_courts.items()}
+                    default_score = int(st.session_state.get("play_to", 9))
+                    new_scores = {}
+                    for cname, schedule in new_schedules.items():
+                        for r_idx, rnd in enumerate(schedule):
+                            matches = [x for x in rnd if isinstance(x, tuple)]
+                            for m_idx, match in enumerate(matches):
+                                key = f"{cname}_r{r_idx}_m{m_idx}"
+                                new_scores[key] = (default_score, default_score)
 
-                            incoming_down = movers_down.get(court_names[c_idx - 1], []) if c_idx > 0 else []
-                            incoming_up = movers_up.get(court_names[c_idx + 1], []) if c_idx < num_courts - 1 else []
-
-                            ordered = []
-                            for r in incoming_down:
-                                ordered.append({"Player": r["name"], "+/−": r["diff"], "Matches Won": r["wins"], "Note": f"(moved down from {court_names[c_idx-1]})"})
-                                for pl in courts[court_names[c_idx-1]]:
-                                    if pl["name"] == r["name"]:
-                                        new_courts[cname].append(pl)
-                                        break
-                            for r in staying:
-                                ordered.append({"Player": r["name"], "+/−": r["diff"], "Matches Won": r["wins"], "Note": ""})
-                                for pl in courts[cname]:
-                                    if pl["name"] == r["name"]:
-                                        new_courts[cname].append(pl)
-                                        break
-                            for r in incoming_up:
-                                ordered.append({"Player": r["name"], "+/−": r["diff"], "Matches Won": r["wins"], "Note": f"(moved up from {court_names[c_idx+1]})"})
-                                for pl in courts[court_names[c_idx+1]]:
-                                    if pl["name"] == r["name"]:
-                                        new_courts[cname].append(pl)
-                                        break
-                            display_data[cname] = ordered
-
-                        st.session_state.assignment_history.append({
-                            "title": f"Start of Cycle {st.session_state.cycle + 1} (After Movement)",
-                            "type": "new_groups",
-                            "data": display_data
-                        })
-
-                        new_schedules = {c: generate_schedule(p) for c, p in new_courts.items()}
-                        default_score = int(st.session_state.get("play_to", 9))
-                        new_scores = {}
-                        for cname, schedule in new_schedules.items():
-                            for r_idx, rnd in enumerate(schedule):
-                                matches = [x for x in rnd if isinstance(x, tuple)]
-                                for m_idx, match in enumerate(matches):
-                                    key = f"{cname}_r{r_idx}_m{m_idx}"
-                                    new_scores[key] = (default_score, default_score)
-
-                        st.session_state.courts = new_courts
-                        st.session_state.schedules = new_schedules
-                        st.session_state.scores = new_scores
-                        st.session_state.cycle += 1
-                        st.session_state.standings = None
-                        st.session_state.relevant_ties = None
-                        st.session_state.skinny_results = {}
-                        save_state()
-                        st.rerun()
-                else:
-                    if st.button("Show Final Results", type="primary"):
-                        for cname, ranking in st.session_state.standings.items():
-                            for r in ranking:
-                                st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
-                                st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
-                        st.session_state.assignment_history.append({
-                            "title": f"End of Cycle {st.session_state.cycle} (Final Rankings)",
-                            "type": "rankings",
-                            "data": st.session_state.standings
-                        })
-                        st.session_state.final_done = True
-                        save_state()
-                        st.rerun()
+                    st.session_state.courts = new_courts
+                    st.session_state.schedules = new_schedules
+                    st.session_state.scores = new_scores
+                    st.session_state.cycle += 1
+                    st.session_state.standings = None
+                    st.session_state.relevant_ties = None
+                    st.session_state.skinny_results = {}
+                    save_state()
+                    st.rerun()
+            else:
+                if st.button("Show Final Results", type="primary"):
+                    for cname, ranking in st.session_state.standings.items():
+                        for r in ranking:
+                            st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
+                            st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
+                    st.session_state.assignment_history.append({
+                        "title": f"End of Cycle {st.session_state.cycle} (Final Rankings)",
+                        "type": "rankings",
+                        "data": st.session_state.standings
+                    })
+                    st.session_state.final_done = True
+                    save_state()
+                    st.rerun()
 
     if st.session_state.get("final_done"):
         st.markdown("---")
