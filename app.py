@@ -91,6 +91,8 @@ if "created" not in st.session_state:
     load_state()
 if "cycle_snapshots" not in st.session_state:
     st.session_state.cycle_snapshots = {}
+if "edit_scores_unlocked" not in st.session_state:
+    st.session_state.edit_scores_unlocked = False
 
 # ---------- Top Admin Bar ----------
 c1, c2, c3 = st.columns([2, 2, 3])
@@ -102,6 +104,7 @@ with c1:
         st.success("Admin Mode Active")
         if st.button("Lock Admin"):
             st.session_state.admin_unlocked = False
+            st.session_state.edit_scores_unlocked = False
             st.rerun()
 
 with c2:
@@ -217,7 +220,7 @@ Emma, 3.5""")
             scores = {}
             for cname, schedule in schedules.items():
                 for r_idx, rnd in enumerate(schedule):
-                    matches = [x for x in rnd if isinstance(x, tuple)]
+                    matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], tuple)]
                     for m_idx, match in enumerate(matches):
                         key = f"{cname}_r{r_idx}_m{m_idx}"
                         scores[key] = (default_score, default_score)
@@ -245,6 +248,7 @@ Emma, 3.5""")
             st.session_state.cumulative = cumulative
             st.session_state.final_done = False
             st.session_state.cycle_snapshots = {}
+            st.session_state.edit_scores_unlocked = False
             save_state()
             st.rerun()
 
@@ -296,6 +300,7 @@ if st.session_state.get("created"):
                                 st.session_state.final_done = False
                                 st.session_state.assignment_history = st.session_state.assignment_history[:idx]
                                 st.session_state[f"ask_pwd_for_edit_{cycle_num}"] = False
+                                st.session_state.edit_scores_unlocked = False
                                 save_state()
                                 st.rerun()
                         else:
@@ -334,7 +339,7 @@ if st.session_state.get("created"):
 
         st.markdown("")
 
-    # ---------- SCORES (show when no rankings yet) ----------
+    # ---------- SCORES ----------
     if not st.session_state.get("final_done") and not st.session_state.get("standings"):
         st.markdown("---")
         st.header(f"3. Scores – Cycle {st.session_state.cycle}")
@@ -346,7 +351,7 @@ if st.session_state.get("created"):
             schedule = schedules.get(cname, [])
 
             if not schedule:
-                st.warning(f"No schedule generated for {cname} (check number of players)")
+                st.warning(f"No schedule generated for {cname}")
                 continue
 
             for r_idx, rnd in enumerate(schedule):
@@ -365,23 +370,17 @@ if st.session_state.get("created"):
                     key = f"{cname}_r{r_idx}_m{m_idx}"
                     current = st.session_state.scores.get(key, (play_to, play_to))
 
-                    c1, c2, c3, c4 = st.columns([3, 1, 1, 3])
-                    with c1:
-                        st.write(f"{t1[0]} & {t1[1]}")
-                    with c2:
+                    # New layout: Left = names vs names | Right = score boxes
+                    left_col, right_col = st.columns([4, 2])
+                    with left_col:
+                        st.write(f"**{t1[0]} & {t1[1]}**  vs  **{t2[0]} & {t2[1]}**")
+                    with right_col:
                         if is_admin:
-                            s1 = st.number_input("s1", min_value=0, max_value=30, value=int(current[0]), key=f"input_s1_{key}", label_visibility="collapsed")
+                            s1 = st.number_input(" ", min_value=0, max_value=30, value=int(current[0]), key=f"input_s1_{key}", label_visibility="collapsed")
+                            s2 = st.number_input("  ", min_value=0, max_value=30, value=int(current[1]), key=f"input_s2_{key}", label_visibility="collapsed")
                         else:
-                            st.write(f"**{current[0]}**")
-                            s1 = current[0]
-                    with c3:
-                        if is_admin:
-                            s2 = st.number_input("s2", min_value=0, max_value=30, value=int(current[1]), key=f"input_s2_{key}", label_visibility="collapsed")
-                        else:
-                            st.write(f"**{current[1]}**")
-                            s2 = current[1]
-                    with c4:
-                        st.write(f"{t2[0]} & {t2[1]}")
+                            st.write(f"**{current[0]} - {current[1]}**")
+                            s1, s2 = current[0], current[1]
 
                     st.session_state.scores[key] = (s1, s2)
 
@@ -444,6 +443,7 @@ if st.session_state.get("created"):
                     "schedules": copy.deepcopy(schedules),
                     "scores": copy.deepcopy(st.session_state.scores)
                 }
+                st.session_state.edit_scores_unlocked = False
                 save_state()
                 st.rerun()
 
@@ -456,11 +456,21 @@ if st.session_state.get("created"):
         with col_edit:
             if is_admin:
                 if st.button("Edit Scores"):
+                    st.session_state.show_edit_pwd = True
+
+        if st.session_state.get("show_edit_pwd"):
+            pwd = st.text_input("Re-enter Admin Password to edit scores", type="password", key="edit_scores_pwd")
+            if pwd:
+                if pwd == st.session_state.admin_password:
                     st.session_state.standings = None
                     st.session_state.relevant_ties = None
                     st.session_state.skinny_results = {}
+                    st.session_state.show_edit_pwd = False
+                    st.session_state.edit_scores_unlocked = True
                     save_state()
                     st.rerun()
+                else:
+                    st.error("Wrong password")
 
         cols = st.columns(num_courts)
         for i, cname in enumerate(court_names):
@@ -472,6 +482,19 @@ if st.session_state.get("created"):
         if st.session_state.get("relevant_ties") and is_admin:
             st.markdown("---")
             st.header("Skinny Singles Required")
+
+            # Collect all currently selected players across up/down for conflict check
+            all_selected = {}
+            for cname, ties in st.session_state.relevant_ties.items():
+                for tie in ties:
+                    key = f"{cname}_{tie['zone']}"
+                    selected = st.session_state.skinny_results.get(key, [])
+                    for p in selected:
+                        if p in all_selected:
+                            all_selected[p].append(tie['zone'])
+                        else:
+                            all_selected[p] = [tie['zone']]
+
             for cname, ties in st.session_state.relevant_ties.items():
                 st.subheader(cname)
                 for tie in ties:
@@ -481,8 +504,16 @@ if st.session_state.get("created"):
                     cbs = st.columns(min(len(tie["players"]), 4))
                     for i, p in enumerate(tie["players"]):
                         with cbs[i % len(cbs)]:
-                            if st.checkbox(p, key=f"sk_{cname}_{tie['zone']}_{p}_{st.session_state.cycle}"):
-                                selected.append(p)
+                            # Check if this player is already selected in the opposite direction
+                            conflict = False
+                            if p in all_selected and any("up" in z and "down" in tie["zone"] or "down" in z and "up" in tie["zone"] for z in all_selected[p]):
+                                conflict = True
+                                st.checkbox(p, value=False, disabled=True, key=f"sk_{cname}_{tie['zone']}_{p}_{st.session_state.cycle}")
+                                st.caption("Already selected other direction")
+                            else:
+                                if st.checkbox(p, key=f"sk_{cname}_{tie['zone']}_{p}_{st.session_state.cycle}"):
+                                    selected.append(p)
+
                     if len(selected) == tie["needed"]:
                         st.session_state.skinny_results[f"{cname}_{tie['zone']}"] = selected
                         st.success(f"Selected: {', '.join(selected)}")
@@ -605,6 +636,7 @@ if st.session_state.get("created"):
                     st.session_state.standings = None
                     st.session_state.relevant_ties = None
                     st.session_state.skinny_results = {}
+                    st.session_state.edit_scores_unlocked = False
                     save_state()
                     st.rerun()
             else:
