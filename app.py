@@ -339,7 +339,7 @@ if st.session_state.get("created"):
 
         st.markdown("")
 
-    # ---------- SCORES ----------
+    # ---------- SCORES (compact layout) ----------
     if not st.session_state.get("final_done") and not st.session_state.get("standings"):
         st.markdown("---")
         st.header(f"3. Scores – Cycle {st.session_state.cycle}")
@@ -370,23 +370,29 @@ if st.session_state.get("created"):
                     key = f"{cname}_r{r_idx}_m{m_idx}"
                     current = st.session_state.scores.get(key, (play_to, play_to))
 
-                    # New layout: Left = names vs names | Right = score boxes
-                    left_col, right_col = st.columns([4, 2])
-                    with left_col:
-                        st.write(f"**{t1[0]} & {t1[1]}**  vs  **{t2[0]} & {t2[1]}**")
-                    with right_col:
+                    # Compact vertical layout
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.markdown(f"**{t1[0]} & {t1[1]}**")
+                        st.markdown("  vs")
+                        st.markdown(f"**{t2[0]} & {t2[1]}**")
+                    with col2:
                         if is_admin:
-                            s1 = st.number_input(" ", min_value=0, max_value=30, value=int(current[0]), key=f"input_s1_{key}", label_visibility="collapsed")
-                            s2 = st.number_input("  ", min_value=0, max_value=30, value=int(current[1]), key=f"input_s2_{key}", label_visibility="collapsed")
+                            s1 = st.number_input("s1", min_value=0, max_value=30, value=int(current[0]), key=f"input_s1_{key}", label_visibility="collapsed")
+                            st.write("")  # small spacer
+                            s2 = st.number_input("s2", min_value=0, max_value=30, value=int(current[1]), key=f"input_s2_{key}", label_visibility="collapsed")
                         else:
-                            st.write(f"**{current[0]} - {current[1]}**")
+                            st.markdown(f"**{current[0]}**")
+                            st.write("")
+                            st.markdown(f"**{current[1]}**")
                             s1, s2 = current[0], current[1]
 
                     st.session_state.scores[key] = (s1, s2)
+                    st.markdown("---")
 
                 if byes:
                     st.caption(f"Bye: {', '.join(byes)}")
-            st.markdown("---")
+            st.markdown("")
 
         if is_admin:
             if st.button("Calculate Rankings + Check Skinny Singles", type="primary"):
@@ -483,7 +489,6 @@ if st.session_state.get("created"):
             st.markdown("---")
             st.header("Skinny Singles Required")
 
-            # Collect all currently selected players across up/down for conflict check
             all_selected = {}
             for cname, ties in st.session_state.relevant_ties.items():
                 for tie in ties:
@@ -504,9 +509,8 @@ if st.session_state.get("created"):
                     cbs = st.columns(min(len(tie["players"]), 4))
                     for i, p in enumerate(tie["players"]):
                         with cbs[i % len(cbs)]:
-                            # Check if this player is already selected in the opposite direction
                             conflict = False
-                            if p in all_selected and any("up" in z and "down" in tie["zone"] or "down" in z and "up" in tie["zone"] for z in all_selected[p]):
+                            if p in all_selected and any(("up" in z and "down" in tie["zone"]) or ("down" in z and "up" in tie["zone"]) for z in all_selected[p]):
                                 conflict = True
                                 st.checkbox(p, value=False, disabled=True, key=f"sk_{cname}_{tie['zone']}_{p}_{st.session_state.cycle}")
                                 st.caption("Already selected other direction")
