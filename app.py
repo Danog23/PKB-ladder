@@ -225,7 +225,7 @@ Emma, 3.5""")
             cumulative = {p["name"]: {"diff": 0, "wins": 0} for p in players}
 
             st.session_state.assignment_history = [{
-                "title": "Starting Assignments (by DUPR)",
+                "title": "Starting Pool Play Ladder (by DUPR)",
                 "type": "groups",
                 "data": courts
             }]
@@ -269,17 +269,17 @@ if st.session_state.get("created"):
         with colh1:
             st.subheader(entry["title"])
         with colh2:
-            if is_admin and entry["type"] == "rankings" and "End of Cycle" in entry["title"]:
+            if is_admin and entry["type"] == "rankings" and "Rankings after Cycle" in entry["title"]:
                 try:
-                    cycle_num = int(entry["title"].split("Cycle ")[1].split(" ")[0])
+                    cycle_num = int(entry["title"].split("Cycle ")[1])
                     if st.button("Edit", key=f"edit_{cycle_num}_{idx}"):
                         st.session_state[f"ask_pwd_for_edit_{cycle_num}"] = True
                 except Exception:
                     pass
 
-        if is_admin and entry["type"] == "rankings" and "End of Cycle" in entry["title"]:
+        if is_admin and entry["type"] == "rankings" and "Rankings after Cycle" in entry["title"]:
             try:
-                cycle_num = int(entry["title"].split("Cycle ")[1].split(" ")[0])
+                cycle_num = int(entry["title"].split("Cycle ")[1])
                 if st.session_state.get(f"ask_pwd_for_edit_{cycle_num}", False):
                     pwd = st.text_input(f"Re-enter Admin Password to edit Cycle {cycle_num}", type="password", key=f"pwd_edit_{cycle_num}")
                     if pwd:
@@ -446,7 +446,19 @@ if st.session_state.get("created"):
     # Rankings + Skinny Singles + Movement
     if st.session_state.get("standings") and not st.session_state.get("final_done"):
         st.markdown("---")
-        st.header("Current Rankings (this cycle)")
+        col_rank, col_edit = st.columns([5, 1])
+        with col_rank:
+            st.header(f"Rankings after Cycle {st.session_state.cycle}")
+        with col_edit:
+            if is_admin:
+                if st.button("Edit Scores"):
+                    # Go back to score entry for this cycle
+                    st.session_state.standings = None
+                    st.session_state.relevant_ties = None
+                    st.session_state.skinny_results = {}
+                    save_state()
+                    st.rerun()
+
         cols = st.columns(num_courts)
         for i, cname in enumerate(court_names):
             with cols[i]:
@@ -497,7 +509,7 @@ if st.session_state.get("created"):
                             st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
 
                     st.session_state.assignment_history.append({
-                        "title": f"End of Cycle {st.session_state.cycle} (Final Rankings)",
+                        "title": f"Rankings after Cycle {st.session_state.cycle}",
                         "type": "rankings",
                         "data": st.session_state.standings
                     })
@@ -599,7 +611,7 @@ if st.session_state.get("created"):
                             st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
                             st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
                     st.session_state.assignment_history.append({
-                        "title": f"End of Cycle {st.session_state.cycle} (Final Rankings)",
+                        "title": f"Rankings after Cycle {st.session_state.cycle}",
                         "type": "rankings",
                         "data": st.session_state.standings
                     })
