@@ -334,7 +334,7 @@ if st.session_state.get("created"):
 
         st.markdown("")
 
-    # ---------- SCORES (only show if rankings not yet calculated) ----------
+    # ---------- SCORES (show when no rankings yet) ----------
     if not st.session_state.get("final_done") and not st.session_state.get("standings"):
         st.markdown("---")
         st.header(f"3. Scores – Cycle {st.session_state.cycle}")
@@ -345,13 +345,17 @@ if st.session_state.get("created"):
             st.subheader(cname)
             schedule = schedules.get(cname, [])
 
+            if not schedule:
+                st.warning(f"No schedule generated for {cname} (check number of players)")
+                continue
+
             for r_idx, rnd in enumerate(schedule):
                 st.markdown(f"**Round {r_idx+1}**")
 
                 matches = []
                 byes = []
                 for item in rnd:
-                    if isinstance(item, tuple) and len(item) == 2:
+                    if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], tuple):
                         matches.append(item)
                     elif isinstance(item, str):
                         byes.append(item)
@@ -394,7 +398,7 @@ if st.session_state.get("created"):
                     diff = defaultdict(int)
                     wins = defaultdict(int)
                     for r_idx, rnd in enumerate(schedule):
-                        matches = [x for x in rnd if isinstance(x, tuple)]
+                        matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], tuple)]
                         for m_idx, match in enumerate(matches):
                             key = f"{cname}_r{r_idx}_m{m_idx}"
                             s1, s2 = st.session_state.scores.get(key, (0, 0))
@@ -443,7 +447,7 @@ if st.session_state.get("created"):
                 save_state()
                 st.rerun()
 
-    # Rankings + Skinny Singles + Movement
+    # Rankings + Skinny Singles
     if st.session_state.get("standings") and not st.session_state.get("final_done"):
         st.markdown("---")
         col_rank, col_edit = st.columns([5, 1])
@@ -452,7 +456,6 @@ if st.session_state.get("created"):
         with col_edit:
             if is_admin:
                 if st.button("Edit Scores"):
-                    # Go back to score entry for this cycle
                     st.session_state.standings = None
                     st.session_state.relevant_ties = None
                     st.session_state.skinny_results = {}
@@ -590,7 +593,7 @@ if st.session_state.get("created"):
                     new_scores = {}
                     for cname, schedule in new_schedules.items():
                         for r_idx, rnd in enumerate(schedule):
-                            matches = [x for x in rnd if isinstance(x, tuple)]
+                            matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], tuple)]
                             for m_idx, match in enumerate(matches):
                                 key = f"{cname}_r{r_idx}_m{m_idx}"
                                 new_scores[key] = (default_score, default_score)
