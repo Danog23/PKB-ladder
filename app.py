@@ -119,6 +119,17 @@ def create_excel():
     output.seek(0)
     return output
 
+def all_matches_locked(schedules, court_names, locked_matches):
+    for cname in court_names:
+        schedule = schedules.get(cname, [])
+        for r_idx, rnd in enumerate(schedule):
+            matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], tuple)]
+            for m_idx, match in enumerate(matches):
+                key = f"{cname}_r{r_idx}_m{m_idx}"
+                if not locked_matches.get(key, False):
+                    return False
+    return True
+
 # ---------- Initialize ----------
 if "admin_unlocked" not in st.session_state:
     st.session_state.admin_unlocked = False
@@ -467,75 +478,82 @@ if st.session_state.get("created"):
                         st.caption(f"Bye: {', '.join(byes)}")
                 st.markdown("")
 
-            if st.button("Calculate Rankings + Check Skinny Singles", type="primary"):
-                standings = {}
-                relevant_ties = {}
-                cycle_lines = []
+            # Only enable the button if all matches are locked
+            all_locked = all_matches_locked(schedules, court_names, st.session_state.locked_matches)
 
-                for c_idx, cname in enumerate(court_names):
-                    schedule = schedules[cname]
-                    diff = defaultdict(int)
-                    wins = defaultdict(int)
-                    for r_idx, rnd in enumerate(schedule):
-                        matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], tuple)]
-                        byes = [x for x in rnd if isinstance(x, str)]
-                        for m_idx, match in enumerate(matches):
-                            key = f"{cname}_r{r_idx}_m{m_idx}"
-                            s1, s2 = st.session_state.scores.get(key, (0, 0))
-                            t1, t2 = match
-                            pdif = s1 - s2
-                            for p in t1: diff[p] += pdif
-                            for p in t2: diff[p] -= pdif
-                            if s1 > s2:
-                                for p in t1: wins[p] += 1
-                            elif s2 > s1:
-                                for p in t2: wins[p] += 1
+            if all_locked:
+                if st.button("Calculate Rankings + Check Skinny Singles", type="primary"):
+                    standings = {}
+                    relevant_ties = {}
+                    cycle_lines = []
 
-                            cycle_lines.append(f"{cname} Round {r_idx+1}: {t1[0]} & {t1[1]} vs {t2[0]} & {t2[1]}   →   {s1} - {s2}")
-                        if byes:
-                            cycle_lines.append(f"{cname} Round {r_idx+1} Bye: {', '.join(byes)}")
+                    for c_idx, cname in enumerate(court_names):
+                        schedule = schedules[cname]
+                        diff = defaultdict(int)
+                        wins = defaultdict(int)
+                        for r_idx, rnd in enumerate(schedule):
+                            matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], tuple)]
+                            byes = [x for x in rnd if isinstance(x, str)]
+                            for m_idx, match in enumerate(matches):
+                                key = f"{cname}_r{r_idx}_m{m_idx}"
+                                s1, s2 = st.session_state.scores.get(key, (0, 0))
+                                t1, t2 = match
+                                pdif = s1 - s2
+                                for p in t1: diff[p] += pdif
+                                for p in t2: diff[p] -= pdif
+                                if s1 > s2:
+                                    for p in t1: wins[p] += 1
+                                elif s2 > s1:
+                                    for p in t2: wins[p] += 1
 
-                    ranking = [{"name": p["name"], "diff": diff[p["name"]], "wins": wins[p["name"]]} for p in courts[cname]]
-                    ranking.sort(key=lambda x: (x["diff"], x["wins"]), reverse=True)
-                    standings[cname] = ranking
+                                cycle_lines.append(f"{cname} Round {r_idx+1}: {t1[0]} & {t1[1]} vs {t2[0]} & {t2[1]}   →   {s1} - {s2}")
+                            if byes:
+                                cycle_lines.append(f"{cname} Round {r_idx+1} Bye: {', '.join(byes)}")
 
-                    is_top = (c_idx == 0)
-                    is_bot = (c_idx == num_courts - 1)
-                    n = len(ranking)
-                    ties = []
-                    if not is_top and n >= 2:
-                        sc = (ranking[1]["diff"], ranking[1]["wins"])
-                        grp = [r for r in ranking if (r["diff"], r["wins"]) == sc]
-                        if len(grp) >= 2:
-                            better = sum(1 for r in ranking if (r["diff"], r["wins"]) > sc)
-                            need = max(0, 2 - better)
-                            if need > 0 and len(grp) > need:
-                                ties.append({"zone": "top (move up)", "players": [r["name"] for r in grp], "score": grp[0]["diff"], "needed": need})
-                    if not is_bot and n >= 2:
-                        sc = (ranking[-2]["diff"], ranking[-2]["wins"])
-                        grp = [r for r in ranking if (r["diff"], r["wins"]) == sc]
-                        if len(grp) >= 2:
-                            worse = sum(1 for r in ranking if (r["diff"], r["wins"]) < sc)
-                            need = max(0, 2 - worse)
-                            if need > 0 and len(grp) > need:
-                                ties.append({"zone": "bottom (move down)", "players": [r["name"] for r in grp], "score": grp[0]["diff"], "needed": need})
-                    if ties:
-                        relevant_ties[cname] = ties
+                        ranking = [{"name": p["name"], "diff": diff[p["name"]], "wins": wins[p["name"]]} for p in courts[cname]]
+                        ranking.sort(key=lambda x: (x["diff"], x["wins"]), reverse=True)
+                        standings[cname] = ranking
 
-                st.session_state.full_score_history.append({
-                    "title": f"Round {st.session_state.cycle} Scores",
-                    "lines": cycle_lines
-                })
+                        is_top = (c_idx == 0)
+                        is_bot = (c_idx == num_courts - 1)
+                        n = len(ranking)
+                        ties = []
+                        if not is_top and n >= 2:
+                            sc = (ranking[1]["diff"], ranking[1]["wins"])
+                            grp = [r for r in ranking if (r["diff"], r["wins"]) == sc]
+                            if len(grp) >= 2:
+                                better = sum(1 for r in ranking if (r["diff"], r["wins"]) > sc)
+                                need = max(0, 2 - better)
+                                if need > 0 and len(grp) > need:
+                                    ties.append({"zone": "top (move up)", "players": [r["name"] for r in grp], "score": grp[0]["diff"], "needed": need})
+                        if not is_bot and n >= 2:
+                            sc = (ranking[-2]["diff"], ranking[-2]["wins"])
+                            grp = [r for r in ranking if (r["diff"], r["wins"]) == sc]
+                            if len(grp) >= 2:
+                                worse = sum(1 for r in ranking if (r["diff"], r["wins"]) < sc)
+                                need = max(0, 2 - worse)
+                                if need > 0 and len(grp) > need:
+                                    ties.append({"zone": "bottom (move down)", "players": [r["name"] for r in grp], "score": grp[0]["diff"], "needed": need})
+                        if ties:
+                            relevant_ties[cname] = ties
 
-                st.session_state.standings = standings
-                st.session_state.relevant_ties = relevant_ties
-                st.session_state.cycle_snapshots[str(st.session_state.cycle)] = {
-                    "courts": copy.deepcopy(courts),
-                    "schedules": copy.deepcopy(schedules),
-                    "scores": copy.deepcopy(st.session_state.scores)
-                }
-                save_state()
-                st.rerun()
+                    st.session_state.full_score_history.append({
+                        "title": f"Round {st.session_state.cycle} Scores",
+                        "lines": cycle_lines
+                    })
+
+                    st.session_state.standings = standings
+                    st.session_state.relevant_ties = relevant_ties
+                    st.session_state.cycle_snapshots[str(st.session_state.cycle)] = {
+                        "courts": copy.deepcopy(courts),
+                        "schedules": copy.deepcopy(schedules),
+                        "scores": copy.deepcopy(st.session_state.scores)
+                    }
+                    save_state()
+                    st.rerun()
+            else:
+                st.button("Calculate Rankings + Check Skinny Singles", type="primary", disabled=True)
+                st.warning("Please save all match scores before calculating rankings.")
         else:
             st.info("Scores are being entered by the Admin. You can view the tables above and use 'View Full Score History'.")
 
