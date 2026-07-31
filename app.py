@@ -220,26 +220,13 @@ if st.session_state.admin_unlocked and not st.session_state.get("created"):
         win_by = st.selectbox("Win by", [1, 2], index=0)
 
     st.header("2. Enter Players")
-    player_text = st.text_area("Players (Name, DUPR)", height=200, value="""Bruce, 5.5
-Tonkla, 5.0
-Vlad, 4.7
-JP, 4.7
-Gav, 4.5
-Pun, 4.4
-Krating, 4.3
-Andy, 4.1
-Dan, 4.2
-Justin, 4.0
-Val, 4.0
-Jack, 3.8
-Tuan, 3.6
-Oscar, 3.6
-Sara, 3.0
-Mike, 3.9
-John, 4.5
-Lisa, 3.7
-Tom, 4.3
-Emma, 3.5""")
+    st.caption("Format: Name, DUPR (one player per line)")
+    player_text = st.text_area(
+        "Players (Name, DUPR)",
+        height=220,
+        value="",
+        placeholder="Example:\nBruce, 5.5\nTonkla, 5.0\nVlad, 4.7\nJP, 4.7\nDan, 4.2"
+    )
 
     if st.button("Create Session", type="primary"):
         players = []
