@@ -161,7 +161,7 @@ if st.session_state.admin_unlocked and not st.session_state.get("created"):
     with col1:
         num_courts = st.number_input("Number of courts", min_value=2, max_value=6, value=3)
     with col2:
-        num_cycles = st.number_input("Number of cycles", min_value=1, max_value=6, value=3)
+        num_cycles = st.number_input("Number of rounds", min_value=1, max_value=6, value=3)
     with col3:
         play_to = st.number_input("Play to", min_value=7, max_value=21, value=9)
     with col4:
@@ -265,7 +265,7 @@ if st.session_state.get("created"):
     is_admin = st.session_state.admin_unlocked
     play_to = st.session_state.get("play_to", 9)
 
-    st.success(f"Cycle {st.session_state.cycle} of {num_cycles}")
+    st.success(f"Round {st.session_state.cycle} of {num_cycles}")
 
     # View Full Score History button
     if st.button("View Full Score History"):
@@ -295,19 +295,19 @@ if st.session_state.get("created"):
         with colh1:
             st.subheader(entry["title"])
         with colh2:
-            if is_admin and entry["type"] == "rankings" and "Rankings after Cycle" in entry["title"]:
+            if is_admin and entry["type"] == "rankings" and "Rankings after Round" in entry["title"]:
                 try:
-                    cycle_num = int(entry["title"].split("Cycle ")[1])
+                    cycle_num = int(entry["title"].split("Round ")[1])
                     if st.button("Edit", key=f"edit_{cycle_num}_{idx}"):
                         st.session_state[f"ask_pwd_for_edit_{cycle_num}"] = True
                 except Exception:
                     pass
 
-        if is_admin and entry["type"] == "rankings" and "Rankings after Cycle" in entry["title"]:
+        if is_admin and entry["type"] == "rankings" and "Rankings after Round" in entry["title"]:
             try:
-                cycle_num = int(entry["title"].split("Cycle ")[1])
+                cycle_num = int(entry["title"].split("Round ")[1])
                 if st.session_state.get(f"ask_pwd_for_edit_{cycle_num}", False):
-                    pwd = st.text_input(f"Re-enter Admin Password to edit Cycle {cycle_num}", type="password", key=f"pwd_edit_{cycle_num}")
+                    pwd = st.text_input(f"Re-enter Admin Password to edit Round {cycle_num}", type="password", key=f"pwd_edit_{cycle_num}")
                     if pwd:
                         if pwd == st.session_state.admin_password:
                             if str(cycle_num) in st.session_state.cycle_snapshots:
@@ -364,7 +364,7 @@ if st.session_state.get("created"):
     if not st.session_state.get("final_done") and not st.session_state.get("standings"):
         if is_admin:
             st.markdown("---")
-            st.header(f"3. Scores – Cycle {st.session_state.cycle}")
+            st.header(f"3. Scores – Round {st.session_state.cycle}")
 
             for cname in court_names:
                 st.subheader(cname)
@@ -431,7 +431,6 @@ if st.session_state.get("created"):
                             elif s2 > s1:
                                 for p in t2: wins[p] += 1
 
-                            # Improved format
                             cycle_lines.append(f"{cname} Round {r_idx+1}: {t1[0]} & {t1[1]} vs {t2[0]} & {t2[1]}   →   {s1} - {s2}")
                         if byes:
                             cycle_lines.append(f"{cname} Round {r_idx+1} Bye: {', '.join(byes)}")
@@ -464,7 +463,7 @@ if st.session_state.get("created"):
                         relevant_ties[cname] = ties
 
                 st.session_state.full_score_history.append({
-                    "title": f"Cycle {st.session_state.cycle} Scores",
+                    "title": f"Round {st.session_state.cycle} Scores",
                     "lines": cycle_lines
                 })
 
@@ -485,7 +484,7 @@ if st.session_state.get("created"):
         st.markdown("---")
         col_rank, col_edit = st.columns([5, 1])
         with col_rank:
-            st.header(f"Rankings after Cycle {st.session_state.cycle}")
+            st.header(f"Rankings after Round {st.session_state.cycle}")
         with col_edit:
             if is_admin:
                 if st.button("Edit Scores"):
@@ -554,10 +553,10 @@ if st.session_state.get("created"):
             st.markdown("---")
             if st.session_state.cycle < num_cycles:
                 if has_conflict:
-                    st.button("Apply Movement & Start Next Cycle", type="primary", disabled=True)
+                    st.button("Apply Movement & Start Next Round", type="primary", disabled=True)
                     st.warning("Fix the conflict above before continuing")
                 else:
-                    if st.button("Apply Movement & Start Next Cycle", type="primary"):
+                    if st.button("Apply Movement & Start Next Round", type="primary"):
                         ready = True
                         if st.session_state.get("relevant_ties"):
                             for cname, ties in st.session_state.relevant_ties.items():
@@ -575,7 +574,7 @@ if st.session_state.get("created"):
                                 st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
 
                         st.session_state.assignment_history.append({
-                            "title": f"Rankings after Cycle {st.session_state.cycle}",
+                            "title": f"Rankings after Round {st.session_state.cycle}",
                             "type": "rankings",
                             "data": st.session_state.standings
                         })
@@ -646,7 +645,7 @@ if st.session_state.get("created"):
                             display_data[cname] = ordered
 
                         st.session_state.assignment_history.append({
-                            "title": f"Start of Cycle {st.session_state.cycle + 1} (After Movement)",
+                            "title": f"Start of Round {st.session_state.cycle + 1} (After Movement)",
                             "type": "new_groups",
                             "data": display_data
                         })
@@ -677,7 +676,7 @@ if st.session_state.get("created"):
                             st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
                             st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
                     st.session_state.assignment_history.append({
-                        "title": f"Rankings after Cycle {st.session_state.cycle}",
+                        "title": f"Rankings after Round {st.session_state.cycle}",
                         "type": "rankings",
                         "data": st.session_state.standings
                     })
@@ -694,7 +693,7 @@ if st.session_state.get("created"):
         medals = ["🥇", "🥈", "🥉"]
         for i, (name, s) in enumerate(overall):
             st.write(f"{medals[i]} **{name}**  —  +/− {s['diff']:+d}  (Matches Won: {s['wins']})")
-        st.subheader("Top 3 from Final Cycle (Court A)")
+        st.subheader("Top 3 from Final Round (Court A)")
         if st.session_state.standings and "Court A" in st.session_state.standings:
             for i, r in enumerate(st.session_state.standings["Court A"][:3]):
                 st.write(f"{medals[i]} **{r['name']}**  —  +/− {r['diff']:+d}")
