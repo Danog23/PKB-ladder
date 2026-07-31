@@ -56,6 +56,19 @@ def load_state():
     except Exception:
         return False
 
+def is_match(item):
+    """Robust check that works with both tuples (in-memory) and lists (after JSON load)"""
+    try:
+        return (
+            isinstance(item, (list, tuple))
+            and len(item) == 2
+            and isinstance(item[0], (list, tuple))
+            and len(item[0]) == 2
+            and isinstance(item[0][0], str)
+        )
+    except Exception:
+        return False
+
 def generate_schedule(players):
     n = len(players)
     names = [p["name"] for p in players]
@@ -125,7 +138,7 @@ def all_matches_locked(schedules, court_names, locked_matches):
     for cname in court_names:
         schedule = schedules.get(cname, [])
         for r_idx, rnd in enumerate(schedule):
-            matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], tuple)]
+            matches = [x for x in rnd if is_match(x)]
             for m_idx, match in enumerate(matches):
                 key = f"{cname}_r{r_idx}_m{m_idx}"
                 if not locked_matches.get(key, False):
@@ -260,7 +273,7 @@ if st.session_state.admin_unlocked and not st.session_state.get("created"):
             scores = {}
             for cname, schedule in schedules.items():
                 for r_idx, rnd in enumerate(schedule):
-                    matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], tuple)]
+                    matches = [x for x in rnd if is_match(x)]
                     for m_idx, match in enumerate(matches):
                         key = f"{cname}_r{r_idx}_m{m_idx}"
                         scores[key] = (default_score, default_score)
@@ -417,7 +430,7 @@ if st.session_state.get("created"):
                 matches = []
                 byes = []
                 for item in rnd:
-                    if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], (list, tuple)):
+                    if is_match(item):
                         matches.append(item)
                     elif isinstance(item, str):
                         byes.append(item)
@@ -449,7 +462,7 @@ if st.session_state.get("created"):
                 matches = []
                 byes = []
                 for item in rnd:
-                    if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], (list, tuple)):
+                    if is_match(item):
                         matches.append(item)
                     elif isinstance(item, str):
                         byes.append(item)
@@ -511,7 +524,7 @@ if st.session_state.get("created"):
                     diff = defaultdict(int)
                     wins = defaultdict(int)
                     for r_idx, rnd in enumerate(schedule):
-                        matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], (list, tuple))]
+                        matches = [x for x in rnd if is_match(x)]
                         byes = [x for x in rnd if isinstance(x, str)]
                         for m_idx, match in enumerate(matches):
                             key = f"{cname}_r{r_idx}_m{m_idx}"
@@ -751,7 +764,7 @@ if st.session_state.get("created"):
                         new_scores = {}
                         for cname, schedule in new_schedules.items():
                             for r_idx, rnd in enumerate(schedule):
-                                matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], (list, tuple))]
+                                matches = [x for x in rnd if is_match(x)]
                                 for m_idx, match in enumerate(matches):
                                     key = f"{cname}_r{r_idx}_m{m_idx}"
                                     new_scores[key] = (default_score, default_score)
