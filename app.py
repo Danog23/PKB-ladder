@@ -4,6 +4,7 @@ from collections import defaultdict
 import json
 import os
 import copy
+from io import BytesIO
 
 st.set_page_config(page_title="Pickleball Pool Ladder", layout="wide")
 st.title("Pickleball Multi-Court Ladder")
@@ -83,6 +84,43 @@ def generate_schedule(players):
         return rounds
     return []
 
+def create_excel():
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        # Rankings history
+        for entry in st.session_state.assignment_history:
+            if entry["type"] == "rankings":
+                rows = []
+                for cname, ranking in entry["data"].items():
+                    for i, r in enumerate(ranking):
+                        rows.append({
+                            "Court": cname,
+                            "Rank": i + 1,
+                            "Player": r["name"],
+                            "+/−": r["diff"],
+                            "Matches Won": r["wins"]
+                        })
+                if rows:
+                    pd.DataFrame(rows).to_excel(writer, sheet_name=entry["title"][:31], index=False)
+
+        # Full score history
+        if st.session_state.full_score_history:
+            all_lines = []
+            for entry in st.session_state.full_score_history:
+                for line in entry["lines"]:
+                    all_lines.append({"Round": entry["title"], "Match": line})
+            pd.DataFrame(all_lines).to_excel(writer, sheet_name="All Match Scores", index=False)
+
+        # Final cumulative
+        if st.session_state.get("cumulative"):
+            cum_rows = []
+            for name, s in st.session_state.cumulative.items():
+                cum_rows.append({"Player": name, "Total +/−": s["diff"], "Total Matches Won": s["wins"]})
+            pd.DataFrame(cum_rows).sort_values("Total +/−", ascending=False).to_excel(writer, sheet_name="Final Standings", index=False)
+
+    output.seek(0)
+    return output
+
 # ---------- Initialize ----------
 if "admin_unlocked" not in st.session_state:
     st.session_state.admin_unlocked = False
@@ -96,6 +134,8 @@ if "full_score_history" not in st.session_state:
     st.session_state.full_score_history = []
 if "show_score_history" not in st.session_state:
     st.session_state.show_score_history = False
+if "editing_match" not in st.session_state:
+    st.session_state.editing_match = None
 
 # ---------- Top Admin Bar ----------
 c1, c2, c3 = st.columns([2, 2, 3])
@@ -252,6 +292,7 @@ Emma, 3.5""")
             st.session_state.cycle_snapshots = {}
             st.session_state.full_score_history = []
             st.session_state.show_score_history = False
+            st.session_state.editing_match = None
             save_state()
             st.rerun()
 
@@ -267,7 +308,7 @@ if st.session_state.get("created"):
 
     st.success(f"Round {st.session_state.cycle} of {num_cycles}")
 
-    # View Full Score History button
+    # View Full Score History
     if st.button("View Full Score History"):
         st.session_state.show_score_history = not st.session_state.show_score_history
 
@@ -390,7 +431,7 @@ if st.session_state.get("created"):
                         key = f"{cname}_r{r_idx}_m{m_idx}"
                         current = st.session_state.scores.get(key, (play_to, play_to))
 
-                        col1, col2 = st.columns([3, 1])
+                        col1, col2, col3 = st.columns([3, 1.2, 1.5])
                         with col1:
                             st.markdown(f"**{t1[0]} & {t1[1]}**")
                             st.markdown("  vs")
@@ -399,6 +440,16 @@ if st.session_state.get("created"):
                             s1 = st.number_input("s1", min_value=0, max_value=30, value=int(current[0]), key=f"input_s1_{key}", label_visibility="collapsed")
                             st.write("")
                             s2 = st.number_input("s2", min_value=0, max_value=30, value=int(current[1]), key=f"input_s2_{key}", label_visibility="collapsed")
+                        with col3:
+                            st.write("")
+                            if st.button("Save", key=f"save_{key}"):
+                                st.session_state.scores[key] = (s1, s2)
+                                save_state()
+                                st.success("Saved")
+                                st.rerun()
+                            if st.button("Edit", key=f"edit_match_{key}"):
+                                st.session_state.editing_match = key
+                                st.rerun()
 
                         st.session_state.scores[key] = (s1, s2)
                         st.markdown("---")
@@ -697,6 +748,16 @@ if st.session_state.get("created"):
         if st.session_state.standings and "Court A" in st.session_state.standings:
             for i, r in enumerate(st.session_state.standings["Court A"][:3]):
                 st.write(f"{medals[i]} **{r['name']}**  —  +/− {r['diff']:+d}")
+
+        st.markdown("---")
+        st.subheader("Download Session")
+        excel_data = create_excel()
+        st.download_button(
+            label="Download Full Session as Excel",
+            data=excel_data,
+            file_name=f"pickleball_session_round_{st.session_state.cycle}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
         st.success("Session complete!")
 
 if st.session_state.get("created"):
