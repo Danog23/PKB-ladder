@@ -33,6 +33,7 @@ def save_state():
         "cycle_snapshots": st.session_state.get("cycle_snapshots", {}),
         "play_to": st.session_state.get("play_to", 9),
         "full_score_history": st.session_state.get("full_score_history", []),
+        "locked_matches": st.session_state.get("locked_matches", {}),
     }
     try:
         with open(SAVE_FILE, "w") as f:
@@ -87,7 +88,6 @@ def generate_schedule(players):
 def create_excel():
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # Rankings history
         for entry in st.session_state.assignment_history:
             if entry["type"] == "rankings":
                 rows = []
@@ -103,7 +103,6 @@ def create_excel():
                 if rows:
                     pd.DataFrame(rows).to_excel(writer, sheet_name=entry["title"][:31], index=False)
 
-        # Full score history
         if st.session_state.full_score_history:
             all_lines = []
             for entry in st.session_state.full_score_history:
@@ -111,7 +110,6 @@ def create_excel():
                     all_lines.append({"Round": entry["title"], "Match": line})
             pd.DataFrame(all_lines).to_excel(writer, sheet_name="All Match Scores", index=False)
 
-        # Final cumulative
         if st.session_state.get("cumulative"):
             cum_rows = []
             for name, s in st.session_state.cumulative.items():
@@ -134,8 +132,8 @@ if "full_score_history" not in st.session_state:
     st.session_state.full_score_history = []
 if "show_score_history" not in st.session_state:
     st.session_state.show_score_history = False
-if "editing_match" not in st.session_state:
-    st.session_state.editing_match = None
+if "locked_matches" not in st.session_state:
+    st.session_state.locked_matches = {}
 
 # ---------- Top Admin Bar ----------
 c1, c2, c3 = st.columns([2, 2, 3])
@@ -292,7 +290,7 @@ Emma, 3.5""")
             st.session_state.cycle_snapshots = {}
             st.session_state.full_score_history = []
             st.session_state.show_score_history = False
-            st.session_state.editing_match = None
+            st.session_state.locked_matches = {}
             save_state()
             st.rerun()
 
@@ -308,7 +306,6 @@ if st.session_state.get("created"):
 
     st.success(f"Round {st.session_state.cycle} of {num_cycles}")
 
-    # View Full Score History
     if st.button("View Full Score History"):
         st.session_state.show_score_history = not st.session_state.show_score_history
 
@@ -327,7 +324,6 @@ if st.session_state.get("created"):
             st.session_state.show_score_history = False
             st.rerun()
 
-    # History tables
     st.markdown("---")
     st.header("Full History")
 
@@ -363,6 +359,7 @@ if st.session_state.get("created"):
                                 st.session_state.final_done = False
                                 st.session_state.assignment_history = st.session_state.assignment_history[:idx]
                                 st.session_state[f"ask_pwd_for_edit_{cycle_num}"] = False
+                                st.session_state.locked_matches = {}
                                 save_state()
                                 st.rerun()
                         else:
@@ -401,7 +398,7 @@ if st.session_state.get("created"):
 
         st.markdown("")
 
-    # ---------- SCORES (Admin only) ----------
+    # ---------- SCORES ----------
     if not st.session_state.get("final_done") and not st.session_state.get("standings"):
         if is_admin:
             st.markdown("---")
@@ -430,6 +427,7 @@ if st.session_state.get("created"):
                         t1, t2 = match
                         key = f"{cname}_r{r_idx}_m{m_idx}"
                         current = st.session_state.scores.get(key, (play_to, play_to))
+                        is_locked = st.session_state.locked_matches.get(key, False)
 
                         col1, col2, col3 = st.columns([3, 1.2, 1.5])
                         with col1:
@@ -437,21 +435,32 @@ if st.session_state.get("created"):
                             st.markdown("  vs")
                             st.markdown(f"**{t2[0]} & {t2[1]}**")
                         with col2:
-                            s1 = st.number_input("s1", min_value=0, max_value=30, value=int(current[0]), key=f"input_s1_{key}", label_visibility="collapsed")
-                            st.write("")
-                            s2 = st.number_input("s2", min_value=0, max_value=30, value=int(current[1]), key=f"input_s2_{key}", label_visibility="collapsed")
+                            if is_locked:
+                                st.markdown(f"**{current[0]}**")
+                                st.write("")
+                                st.markdown(f"**{current[1]}**")
+                                s1, s2 = current
+                            else:
+                                s1 = st.number_input("s1", min_value=0, max_value=30, value=int(current[0]), key=f"input_s1_{key}", label_visibility="collapsed")
+                                st.write("")
+                                s2 = st.number_input("s2", min_value=0, max_value=30, value=int(current[1]), key=f"input_s2_{key}", label_visibility="collapsed")
                         with col3:
                             st.write("")
-                            if st.button("Save", key=f"save_{key}"):
-                                st.session_state.scores[key] = (s1, s2)
-                                save_state()
-                                st.success("Saved")
-                                st.rerun()
-                            if st.button("Edit", key=f"edit_match_{key}"):
-                                st.session_state.editing_match = key
-                                st.rerun()
+                            if is_locked:
+                                if st.button("Edit", key=f"edit_{key}"):
+                                    st.session_state.locked_matches[key] = False
+                                    save_state()
+                                    st.rerun()
+                            else:
+                                if st.button("Save", key=f"save_{key}"):
+                                    st.session_state.scores[key] = (s1, s2)
+                                    st.session_state.locked_matches[key] = True
+                                    save_state()
+                                    st.success("Saved & Locked")
+                                    st.rerun()
 
-                        st.session_state.scores[key] = (s1, s2)
+                        if not is_locked:
+                            st.session_state.scores[key] = (s1, s2)
                         st.markdown("---")
 
                     if byes:
@@ -549,6 +558,7 @@ if st.session_state.get("created"):
                     st.session_state.relevant_ties = None
                     st.session_state.skinny_results = {}
                     st.session_state.show_edit_pwd = False
+                    st.session_state.locked_matches = {}
                     save_state()
                     st.rerun()
                 else:
@@ -718,6 +728,7 @@ if st.session_state.get("created"):
                         st.session_state.standings = None
                         st.session_state.relevant_ties = None
                         st.session_state.skinny_results = {}
+                        st.session_state.locked_matches = {}
                         save_state()
                         st.rerun()
             else:
@@ -751,13 +762,17 @@ if st.session_state.get("created"):
 
         st.markdown("---")
         st.subheader("Download Session")
-        excel_data = create_excel()
-        st.download_button(
-            label="Download Full Session as Excel",
-            data=excel_data,
-            file_name=f"pickleball_session_round_{st.session_state.cycle}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        try:
+            excel_data = create_excel()
+            st.download_button(
+                label="Download Full Session as Excel",
+                data=excel_data,
+                file_name=f"pickleball_session_round_{st.session_state.cycle}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.error(f"Excel download failed: {e}")
+            st.info("Make sure you have added openpyxl to requirements.txt")
         st.success("Session complete!")
 
 if st.session_state.get("created"):
