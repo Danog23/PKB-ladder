@@ -9,7 +9,6 @@ from io import BytesIO
 st.set_page_config(page_title="Pickleball Pool Ladder", layout="wide")
 st.title("Pickleball Multi-Court Ladder")
 
-# Helpful note for users
 st.info("**Note:** If you don’t see the latest scores or rankings, please **refresh the page** or **open the link again**.")
 
 SAVE_FILE = "pickleball_session.json"
@@ -399,18 +398,48 @@ if st.session_state.get("created"):
 
         st.markdown("")
 
-    # ---------- SCORES ----------
+    # ---------- CURRENT MATCH SCHEDULE (visible to EVERYONE while round is active) ----------
     if not st.session_state.get("final_done") and not st.session_state.get("standings"):
+        st.markdown("---")
+        st.header(f"Current Match Schedule – Round {st.session_state.cycle}")
+
+        for cname in court_names:
+            st.subheader(cname)
+            schedule = schedules.get(cname, [])
+
+            if not schedule:
+                st.warning(f"No schedule generated for {cname}")
+                continue
+
+            for r_idx, rnd in enumerate(schedule):
+                st.markdown(f"**Round {r_idx+1}**")
+
+                matches = []
+                byes = []
+                for item in rnd:
+                    if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], tuple):
+                        matches.append(item)
+                    elif isinstance(item, str):
+                        byes.append(item)
+
+                for match in matches:
+                    t1, t2 = match
+                    st.write(f"**{t1[0]} & {t1[1]}**  vs  **{t2[0]} & {t2[1]}**")
+
+                if byes:
+                    st.caption(f"Bye: {', '.join(byes)}")
+                st.markdown("")
+
+        # ---------- ADMIN ONLY: Score entry ----------
         if is_admin:
             st.markdown("---")
-            st.header(f"3. Scores – Round {st.session_state.cycle}")
+            st.header(f"Enter Scores – Round {st.session_state.cycle}")
 
             for cname in court_names:
                 st.subheader(cname)
                 schedule = schedules.get(cname, [])
 
                 if not schedule:
-                    st.warning(f"No schedule generated for {cname}")
                     continue
 
                 for r_idx, rnd in enumerate(schedule):
@@ -543,8 +572,6 @@ if st.session_state.get("created"):
             else:
                 st.button("Calculate Rankings + Check Skinny Singles", type="primary", disabled=True)
                 st.warning("Please save all match scores before calculating rankings.")
-        else:
-            st.info("Scores are being entered by the Admin. You can view the tables above and use 'View Full Score History'.")
 
     # Rankings + Skinny Singles
     if st.session_state.get("standings") and not st.session_state.get("final_done"):
