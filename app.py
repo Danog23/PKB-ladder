@@ -105,7 +105,7 @@ with c1:
             st.session_state.show_admin_login = True
     else:
         st.success("Admin Mode Active")
-        if st.button("Lock Admin"):
+        if st.button("User Mode"):
             st.session_state.admin_unlocked = False
             st.rerun()
 
@@ -267,7 +267,7 @@ if st.session_state.get("created"):
 
     st.success(f"Cycle {st.session_state.cycle} of {num_cycles}")
 
-    # View Full Score History button (available to everyone)
+    # View Full Score History button
     if st.button("View Full Score History"):
         st.session_state.show_score_history = not st.session_state.show_score_history
 
@@ -431,8 +431,8 @@ if st.session_state.get("created"):
                             elif s2 > s1:
                                 for p in t2: wins[p] += 1
 
-                            # Save readable line for history
-                            cycle_lines.append(f"{cname} Round {r_idx+1}: {t1[0]} & {t1[1]}  {s1} - {s2}  {t2[0]} & {t2[1]}")
+                            # Improved format
+                            cycle_lines.append(f"{cname} Round {r_idx+1}: {t1[0]} & {t1[1]} vs {t2[0]} & {t2[1]}   →   {s1} - {s2}")
                         if byes:
                             cycle_lines.append(f"{cname} Round {r_idx+1} Bye: {', '.join(byes)}")
 
@@ -463,7 +463,6 @@ if st.session_state.get("created"):
                     if ties:
                         relevant_ties[cname] = ties
 
-                # Save to full score history
                 st.session_state.full_score_history.append({
                     "title": f"Cycle {st.session_state.cycle} Scores",
                     "lines": cycle_lines
