@@ -31,6 +31,7 @@ def save_state():
         "admin_password": st.session_state.get("admin_password", "2302"),
         "cycle_snapshots": st.session_state.get("cycle_snapshots", {}),
         "play_to": st.session_state.get("play_to", 9),
+        "full_score_history": st.session_state.get("full_score_history", []),
     }
     try:
         with open(SAVE_FILE, "w") as f:
@@ -91,8 +92,10 @@ if "created" not in st.session_state:
     load_state()
 if "cycle_snapshots" not in st.session_state:
     st.session_state.cycle_snapshots = {}
-if "edit_scores_unlocked" not in st.session_state:
-    st.session_state.edit_scores_unlocked = False
+if "full_score_history" not in st.session_state:
+    st.session_state.full_score_history = []
+if "show_score_history" not in st.session_state:
+    st.session_state.show_score_history = False
 
 # ---------- Top Admin Bar ----------
 c1, c2, c3 = st.columns([2, 2, 3])
@@ -104,7 +107,6 @@ with c1:
         st.success("Admin Mode Active")
         if st.button("Lock Admin"):
             st.session_state.admin_unlocked = False
-            st.session_state.edit_scores_unlocked = False
             st.rerun()
 
 with c2:
@@ -248,7 +250,8 @@ Emma, 3.5""")
             st.session_state.cumulative = cumulative
             st.session_state.final_done = False
             st.session_state.cycle_snapshots = {}
-            st.session_state.edit_scores_unlocked = False
+            st.session_state.full_score_history = []
+            st.session_state.show_score_history = False
             save_state()
             st.rerun()
 
@@ -264,7 +267,26 @@ if st.session_state.get("created"):
 
     st.success(f"Cycle {st.session_state.cycle} of {num_cycles}")
 
-    # History
+    # View Full Score History button (available to everyone)
+    if st.button("View Full Score History"):
+        st.session_state.show_score_history = not st.session_state.show_score_history
+
+    if st.session_state.show_score_history:
+        st.markdown("---")
+        st.header("Full Score History (All Matches)")
+        if not st.session_state.full_score_history:
+            st.info("No scores recorded yet.")
+        else:
+            for entry in st.session_state.full_score_history:
+                st.subheader(entry["title"])
+                for line in entry["lines"]:
+                    st.write(line)
+                st.markdown("---")
+        if st.button("Close Score History"):
+            st.session_state.show_score_history = False
+            st.rerun()
+
+    # History tables
     st.markdown("---")
     st.header("Full History")
 
@@ -300,7 +322,6 @@ if st.session_state.get("created"):
                                 st.session_state.final_done = False
                                 st.session_state.assignment_history = st.session_state.assignment_history[:idx]
                                 st.session_state[f"ask_pwd_for_edit_{cycle_num}"] = False
-                                st.session_state.edit_scores_unlocked = False
                                 save_state()
                                 st.rerun()
                         else:
@@ -339,70 +360,65 @@ if st.session_state.get("created"):
 
         st.markdown("")
 
-    # ---------- SCORES ----------
+    # ---------- SCORES (Admin only) ----------
     if not st.session_state.get("final_done") and not st.session_state.get("standings"):
-        st.markdown("---")
-        st.header(f"3. Scores – Cycle {st.session_state.cycle}")
-        if not is_admin:
-            st.info("View only. Unlock Administrative Mode to edit scores.")
+        if is_admin:
+            st.markdown("---")
+            st.header(f"3. Scores – Cycle {st.session_state.cycle}")
 
-        for cname in court_names:
-            st.subheader(cname)
-            schedule = schedules.get(cname, [])
+            for cname in court_names:
+                st.subheader(cname)
+                schedule = schedules.get(cname, [])
 
-            if not schedule:
-                st.warning(f"No schedule generated for {cname}")
-                continue
+                if not schedule:
+                    st.warning(f"No schedule generated for {cname}")
+                    continue
 
-            for r_idx, rnd in enumerate(schedule):
-                st.markdown(f"**Round {r_idx+1}**")
+                for r_idx, rnd in enumerate(schedule):
+                    st.markdown(f"**Round {r_idx+1}**")
 
-                matches = []
-                byes = []
-                for item in rnd:
-                    if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], tuple):
-                        matches.append(item)
-                    elif isinstance(item, str):
-                        byes.append(item)
+                    matches = []
+                    byes = []
+                    for item in rnd:
+                        if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], tuple):
+                            matches.append(item)
+                        elif isinstance(item, str):
+                            byes.append(item)
 
-                for m_idx, match in enumerate(matches):
-                    t1, t2 = match
-                    key = f"{cname}_r{r_idx}_m{m_idx}"
-                    current = st.session_state.scores.get(key, (play_to, play_to))
+                    for m_idx, match in enumerate(matches):
+                        t1, t2 = match
+                        key = f"{cname}_r{r_idx}_m{m_idx}"
+                        current = st.session_state.scores.get(key, (play_to, play_to))
 
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.markdown(f"**{t1[0]} & {t1[1]}**")
-                        st.markdown("  vs")
-                        st.markdown(f"**{t2[0]} & {t2[1]}**")
-                    with col2:
-                        if is_admin:
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.markdown(f"**{t1[0]} & {t1[1]}**")
+                            st.markdown("  vs")
+                            st.markdown(f"**{t2[0]} & {t2[1]}**")
+                        with col2:
                             s1 = st.number_input("s1", min_value=0, max_value=30, value=int(current[0]), key=f"input_s1_{key}", label_visibility="collapsed")
                             st.write("")
                             s2 = st.number_input("s2", min_value=0, max_value=30, value=int(current[1]), key=f"input_s2_{key}", label_visibility="collapsed")
-                        else:
-                            st.markdown(f"**{current[0]}**")
-                            st.write("")
-                            st.markdown(f"**{current[1]}**")
-                            s1, s2 = current[0], current[1]
 
-                    st.session_state.scores[key] = (s1, s2)
-                    st.markdown("---")
+                        st.session_state.scores[key] = (s1, s2)
+                        st.markdown("---")
 
-                if byes:
-                    st.caption(f"Bye: {', '.join(byes)}")
-            st.markdown("")
+                    if byes:
+                        st.caption(f"Bye: {', '.join(byes)}")
+                st.markdown("")
 
-        if is_admin:
             if st.button("Calculate Rankings + Check Skinny Singles", type="primary"):
                 standings = {}
                 relevant_ties = {}
+                cycle_lines = []
+
                 for c_idx, cname in enumerate(court_names):
                     schedule = schedules[cname]
                     diff = defaultdict(int)
                     wins = defaultdict(int)
                     for r_idx, rnd in enumerate(schedule):
                         matches = [x for x in rnd if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], tuple)]
+                        byes = [x for x in rnd if isinstance(x, str)]
                         for m_idx, match in enumerate(matches):
                             key = f"{cname}_r{r_idx}_m{m_idx}"
                             s1, s2 = st.session_state.scores.get(key, (0, 0))
@@ -414,6 +430,12 @@ if st.session_state.get("created"):
                                 for p in t1: wins[p] += 1
                             elif s2 > s1:
                                 for p in t2: wins[p] += 1
+
+                            # Save readable line for history
+                            cycle_lines.append(f"{cname} Round {r_idx+1}: {t1[0]} & {t1[1]}  {s1} - {s2}  {t2[0]} & {t2[1]}")
+                        if byes:
+                            cycle_lines.append(f"{cname} Round {r_idx+1} Bye: {', '.join(byes)}")
+
                     ranking = [{"name": p["name"], "diff": diff[p["name"]], "wins": wins[p["name"]]} for p in courts[cname]]
                     ranking.sort(key=lambda x: (x["diff"], x["wins"]), reverse=True)
                     standings[cname] = ranking
@@ -441,6 +463,12 @@ if st.session_state.get("created"):
                     if ties:
                         relevant_ties[cname] = ties
 
+                # Save to full score history
+                st.session_state.full_score_history.append({
+                    "title": f"Cycle {st.session_state.cycle} Scores",
+                    "lines": cycle_lines
+                })
+
                 st.session_state.standings = standings
                 st.session_state.relevant_ties = relevant_ties
                 st.session_state.cycle_snapshots[str(st.session_state.cycle)] = {
@@ -448,9 +476,10 @@ if st.session_state.get("created"):
                     "schedules": copy.deepcopy(schedules),
                     "scores": copy.deepcopy(st.session_state.scores)
                 }
-                st.session_state.edit_scores_unlocked = False
                 save_state()
                 st.rerun()
+        else:
+            st.info("Scores are being entered by the Admin. You can view the tables above and use 'View Full Score History'.")
 
     # Rankings + Skinny Singles
     if st.session_state.get("standings") and not st.session_state.get("final_done"):
@@ -471,7 +500,6 @@ if st.session_state.get("created"):
                     st.session_state.relevant_ties = None
                     st.session_state.skinny_results = {}
                     st.session_state.show_edit_pwd = False
-                    st.session_state.edit_scores_unlocked = True
                     save_state()
                     st.rerun()
                 else:
@@ -489,7 +517,6 @@ if st.session_state.get("created"):
             st.markdown("---")
             st.header("Skinny Singles Required")
 
-            # First collect current selections (free selection)
             current_selections = {}
             for cname, ties in st.session_state.relevant_ties.items():
                 for tie in ties:
@@ -511,7 +538,6 @@ if st.session_state.get("created"):
                     elif len(selected) > 0:
                         st.warning(f"Select {tie['needed'] - len(selected)} more")
 
-            # Check for conflicts (same player in both up and down)
             up_players = set()
             down_players = set()
             for key, selected in current_selections.items():
@@ -643,7 +669,6 @@ if st.session_state.get("created"):
                         st.session_state.standings = None
                         st.session_state.relevant_ties = None
                         st.session_state.skinny_results = {}
-                        st.session_state.edit_scores_unlocked = False
                         save_state()
                         st.rerun()
             else:
