@@ -9,6 +9,9 @@ from io import BytesIO
 st.set_page_config(page_title="Pickleball Pool Ladder", layout="wide")
 st.title("Pickleball Multi-Court Ladder")
 
+# Helpful note for users
+st.info("**Note:** If you don’t see the latest scores or rankings, please **refresh the page** or **open the link again**.")
+
 SAVE_FILE = "pickleball_session.json"
 
 def save_state():
@@ -478,7 +481,6 @@ if st.session_state.get("created"):
                         st.caption(f"Bye: {', '.join(byes)}")
                 st.markdown("")
 
-            # Only enable the button if all matches are locked
             all_locked = all_matches_locked(schedules, court_names, st.session_state.locked_matches)
 
             if all_locked:
