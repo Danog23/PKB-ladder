@@ -37,7 +37,6 @@ def save_hof(hof_data):
         return False
 
 def get_top5_with_ranks(hof_data):
-    """Return list of (rank, name, stats) using dense ranking (ties share rank)"""
     if not hof_data:
         return []
     items = list(hof_data.items())
@@ -66,6 +65,59 @@ def update_hof_from_session(cumulative):
         hof[name]["sessions"] = hof[name].get("sessions", 0) + 1
     save_hof(hof)
     return hof
+
+# ---------- Excel export ----------
+def create_excel_report():
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        # Session info
+        info = {
+            "Setting": ["Courts", "Pools", "Players per pool", "Movers", "Rounds", "Play to"],
+            "Value": [
+                st.session_state.get("num_courts"),
+                st.session_state.get("num_pools"),
+                st.session_state.get("players_per_pool"),
+                st.session_state.get("movers"),
+                st.session_state.get("num_cycles"),
+                st.session_state.get("play_to"),
+            ]
+        }
+        pd.DataFrame(info).to_excel(writer, sheet_name="Session Info", index=False)
+
+        # Starting ladder
+        if st.session_state.get("assignment_history"):
+            start = st.session_state.assignment_history[0]
+            if start["type"] == "groups":
+                rows = []
+                for pname, plist in start["data"].items():
+                    for p in plist:
+                        rows.append({"Pool": pname, "Player": p["name"], "DUPR": p["dupr"]})
+                pd.DataFrame(rows).to_excel(writer, sheet_name="Starting Ladder", index=False)
+
+        # All scores
+        score_rows = []
+        for entry in st.session_state.get("full_score_history", []):
+            for line in entry.get("lines", []):
+                score_rows.append({"Round": entry["title"], "Match": line})
+        if score_rows:
+            pd.DataFrame(score_rows).to_excel(writer, sheet_name="All Scores", index=False)
+
+        # Final cumulative
+        cum = st.session_state.get("cumulative", {})
+        if cum:
+            cum_rows = [{"Player": n, "+/−": s["diff"], "Wins": s["wins"]} for n, s in cum.items()]
+            cum_rows = sorted(cum_rows, key=lambda x: (x["+/−"], x["Wins"]), reverse=True)
+            pd.DataFrame(cum_rows).to_excel(writer, sheet_name="Final Cumulative", index=False)
+
+        # Hall of Fame
+        hof = load_hof()
+        top5 = get_top5_with_ranks(hof)
+        if top5:
+            hof_rows = [{"Rank": r, "Player": n, "+/−": s.get("diff",0), "Wins": s.get("wins",0), "Sessions": s.get("sessions",0)} for r,n,s in top5]
+            pd.DataFrame(hof_rows).to_excel(writer, sheet_name="Hall of Fame", index=False)
+
+    output.seek(0)
+    return output
 
 # ---------- Normal session helpers ----------
 def save_state():
@@ -342,36 +394,29 @@ if st.session_state.get("show_change_password") and st.session_state.admin_unloc
         else:
             st.error("Current password incorrect or new password too short")
 
-# Reset Hall of Fame - FIXED
+# Reset Hall of Fame
 if st.session_state.get("show_reset_hof") and st.session_state.admin_unlocked:
     st.warning("This will permanently delete the Hall of Fame rankings.")
     pwd = st.text_input("Enter Admin Password to confirm Reset", type="password", key="reset_hof_pwd")
     if pwd:
         if pwd == st.session_state.admin_password:
-            # Force clear the file
-            success = save_hof({})
-            # Also try deleting the file completely
+            save_hof({})
             if os.path.exists(HOF_FILE):
                 try:
                     os.remove(HOF_FILE)
                 except Exception:
                     pass
-            # Write empty again just to be sure
             save_hof({})
-            
             st.session_state.show_reset_hof = False
             st.session_state.hof_priority_players = []
-            if success:
-                st.success("✅ Hall of Fame has been completely reset and is now empty.")
-            else:
-                st.error("Failed to write empty Hall of Fame file.")
+            st.success("✅ Hall of Fame has been completely reset and is now empty.")
             st.rerun()
         else:
             st.error("Wrong password")
 
 st.markdown("---")
 
-# ---------- Hall of Fame Page (always available) ----------
+# ---------- Hall of Fame Page ----------
 if st.session_state.show_hof_page:
     st.header("🏆 Hall of Fame – Top 5")
     hof_data = load_hof()
@@ -408,7 +453,7 @@ if st.session_state.admin_unlocked and not st.session_state.get("created"):
         play_to = st.number_input("Play to", min_value=7, max_value=21, value=9)
 
     max_players = preferred_pools * preferred_size
-    st.caption(f"Maximum capacity: **{max_players}** players. The app will adapt if fewer players turn up.")
+    st.caption(f"Maximum capacity: **{max_players}** players.")
 
     st.header("2. Enter Players")
     st.caption(f"Format: Name, DUPR. Maximum **{max_players}** players.")
@@ -444,7 +489,6 @@ Skyler, 3.9"""
         elif len(players) > max_players:
             st.error(f"Too many players. Maximum is **{max_players}**.")
         else:
-            # ----- Hall of Fame priority seeding (strictly from current file) -----
             hof = load_hof()
             top5_list = get_top5_with_ranks(hof)
             top5_names = [name for _, name, _ in top5_list]
@@ -452,23 +496,17 @@ Skyler, 3.9"""
             hof_players = []
             other_players = []
             
-            # Only give priority if the Hall of Fame actually has players
             if top5_names:
                 for p in players:
                     if p["name"] in top5_names:
                         hof_players.append(p)
                     else:
                         other_players.append(p)
-                
-                # Sort HoF players by their Hall of Fame rank
                 hof_players.sort(key=lambda p: top5_names.index(p["name"]) if p["name"] in top5_names else 999)
             else:
-                # Hall of Fame is empty → everyone sorted by DUPR only
                 other_players = players[:]
             
-            # Sort the rest by DUPR
             other_players = sorted(other_players, key=lambda x: x["dupr"], reverse=True)
-            
             players = hof_players + other_players
             hof_priority_names = [p["name"] for p in hof_players]
 
@@ -639,9 +677,11 @@ if st.session_state.get("created"):
                         if pwd == st.session_state.admin_password:
                             if str(cycle_num) in st.session_state.cycle_snapshots:
                                 snap = st.session_state.cycle_snapshots[str(cycle_num)]
+                                
+                                # Restore the exact state from the snapshot
                                 st.session_state.pools = copy.deepcopy(snap.get("pools", st.session_state.pools))
                                 st.session_state.schedules = copy.deepcopy(snap.get("schedules", st.session_state.schedules))
-                                st.session_state.scores = copy.deepcopy(snap.get("scores", st.session_state.scores))
+                                st.session_state.scores = copy.deepcopy(snap.get("scores", {}))
                                 st.session_state.cycle = cycle_num
                                 st.session_state.standings = None
                                 st.session_state.relevant_ties = None
@@ -649,8 +689,8 @@ if st.session_state.get("created"):
                                 st.session_state.final_done = False
                                 st.session_state.assignment_history = st.session_state.assignment_history[:idx]
                                 st.session_state[f"ask_pwd_edit_{cycle_num}"] = False
-                                st.session_state.locked_matches = {}
-                                st.session_state.completed_matches = []
+                                
+                                # Rebuild queues but KEEP the restored scores
                                 if use_shared:
                                     mq = build_interleaved_queue(st.session_state.schedules, pool_names)
                                     cs = {c: None for c in court_names}
@@ -668,12 +708,18 @@ if st.session_state.get("created"):
                                             cq[court] = q[1:]
                                     st.session_state.court_queues = cq
                                     st.session_state.court_status = cs
+                                
+                                # Mark all matches as unlocked so they can be edited, but scores stay
+                                st.session_state.locked_matches = {}
+                                st.session_state.completed_matches = []
+                                
                                 save_state()
+                                st.success(f"Restored Round {cycle_num} with the original scores. You can now edit them.")
                                 st.rerun()
                         else:
                             st.error("Wrong password")
-            except:
-                pass
+            except Exception as e:
+                st.error(f"Error restoring: {e}")
 
         if entry["type"] in ["groups", "rankings", "new_groups"]:
             cols = st.columns(min(len(pool_names), 4))
@@ -749,7 +795,6 @@ if st.session_state.get("created"):
                             st.rerun()
                     with col4:
                         if st.button("Skip", key=f"skip_{court}_{key}"):
-                            # Move current match to the end of the queue
                             if use_shared:
                                 st.session_state.match_queue.append(status)
                                 if st.session_state.match_queue:
@@ -889,6 +934,7 @@ if st.session_state.get("created"):
                     if ties:
                         relevant_ties[pname] = ties
 
+                # Save snapshot WITH the real scores
                 st.session_state.cycle_snapshots[str(st.session_state.cycle)] = {
                     "pools": copy.deepcopy(pools),
                     "schedules": copy.deepcopy(schedules),
@@ -1035,6 +1081,9 @@ if st.session_state.get("created"):
                                     else:
                                         new_scores[key] = (play_to - 1, play_to)
 
+                        # Keep old scores + add new ones
+                        st.session_state.scores.update(new_scores)
+
                         match_queue = []
                         court_status = {c: None for c in court_names}
                         court_queues = {}
@@ -1054,7 +1103,6 @@ if st.session_state.get("created"):
 
                         st.session_state.pools = new_pools
                         st.session_state.schedules = new_schedules
-                        st.session_state.scores = new_scores
                         st.session_state.cycle += 1
                         st.session_state.standings = None
                         st.session_state.relevant_ties = None
@@ -1091,7 +1139,7 @@ if st.session_state.get("created"):
                     else:
                         st.error("Wrong password")
 
-    # ==================== FINAL RESULTS + HALL OF FAME UPDATE ====================
+    # ==================== FINAL RESULTS + HALL OF FAME + EXCEL ----------
     if st.session_state.get("final_done"):
         st.markdown("---")
         st.header("Final Results")
@@ -1128,7 +1176,7 @@ if st.session_state.get("created"):
         for medal, c in assign_medals(climbers, key_func=lambda x: x["climbed"]):
             st.write(f"{medal} **{c['name']}**  —  Climbed **{c['climbed']:+d}** positions (Start #{c['start']} → Final #{c['final']})")
 
-        # ----- Update Hall of Fame -----
+        # Hall of Fame update
         st.markdown("---")
         st.header("🏆 Hall of Fame Updated")
         updated_hof = update_hof_from_session(st.session_state.cumulative)
@@ -1141,6 +1189,20 @@ if st.session_state.get("created"):
             st.info("Hall of Fame is empty.")
 
         st.success("Session complete! Hall of Fame has been updated.")
+
+        # Excel Download
+        st.markdown("---")
+        st.subheader("Download Session Report")
+        try:
+            excel_data = create_excel_report()
+            st.download_button(
+                label="📥 Download Excel Report",
+                data=excel_data,
+                file_name="pickleball_session_report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.warning(f"Could not generate Excel (you may need openpyxl). Error: {e}")
 
 if st.session_state.get("created"):
     save_state()
