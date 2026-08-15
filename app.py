@@ -740,7 +740,7 @@ if st.session_state.get("created"):
                 st.write(f"**{court}**: Free / Finished")
                 st.markdown("---")
 
-            # ---------- COURT BOARD ----------
+    # ---------- COURT BOARD ----------
     if not st.session_state.get("standings") and not st.session_state.get("final_done"):
         st.markdown("---")
         st.header(f"Court Board – Round {st.session_state.cycle}")
@@ -1008,4 +1008,149 @@ if st.session_state.get("created"):
 
                         for p_idx, pname in enumerate(pool_names):
                             ranking = final_rankings[pname]
-                            staying = [
+                            staying = [r for r in ranking if not any(r["name"] == m["name"] for m in movers_up[pname] + movers_down[pname])]
+                            incoming_down = movers_down.get(pool_names[p_idx-1], []) if p_idx > 0 else []
+                            incoming_up = movers_up.get(pool_names[p_idx+1], []) if p_idx < num_pools - 1 else []
+
+                            ordered = []
+                            for r in incoming_down:
+                                ordered.append({"Player": r["name"], "+/−": 0, "Note": f"(down from {pool_names[p_idx-1]})"})
+                                for pl in pools[pool_names[p_idx-1]]:
+                                    if pl["name"] == r["name"]:
+                                        new_pools[pname].append(pl)
+                                        break
+                            for r in staying:
+                                ordered.append({"Player": r["name"], "+/−": 0, "Note": ""})
+                                for pl in pools[pname]:
+                                    if pl["name"] == r["name"]:
+                                        new_pools[pname].append(pl)
+                                        break
+                            for r in incoming_up:
+                                ordered.append({"Player": r["name"], "+/−": 0, "Note": f"(up from {pool_names[p_idx+1]})"})
+                                for pl in pools[pool_names[p_idx+1]]:
+                                    if pl["name"] == r["name"]:
+                                        new_pools[pname].append(pl)
+                                        break
+                            display_data[pname] = ordered
+
+                        st.session_state.assignment_history.append({
+                            "title": f"Start of Round {st.session_state.cycle + 1} (After Movement)",
+                            "type": "new_groups",
+                            "data": display_data
+                        })
+
+                        new_schedules = {p: generate_schedule(pl) for p, pl in new_pools.items()}
+                        new_scores = {}
+                        for pname, schedule in new_schedules.items():
+                            for r_idx, rnd in enumerate(schedule):
+                                matches = [x for x in rnd if is_match(x)]
+                                for m_idx, match in enumerate(matches):
+                                    key = f"{pname}_r{r_idx}_m{m_idx}"
+                                    if random.random() < 0.5:
+                                        new_scores[key] = (play_to, play_to - 1)
+                                    else:
+                                        new_scores[key] = (play_to - 1, play_to)
+
+                        st.session_state.scores.update(new_scores)
+
+                        match_queue = []
+                        court_status = {c: None for c in court_names}
+                        court_queues = {}
+
+                        if use_shared:
+                            match_queue = build_interleaved_queue(new_schedules, pool_names)
+                            for i, court in enumerate(court_names):
+                                if i < len(match_queue):
+                                    court_status[court] = match_queue[i]
+                            match_queue = match_queue[len(court_names):]
+                        else:
+                            court_queues = build_court_queues(new_schedules, pool_names, court_names)
+                            for court, q in court_queues.items():
+                                if q:
+                                    court_status[court] = q[0]
+                                    court_queues[court] = q[1:]
+
+                        st.session_state.pools = new_pools
+                        st.session_state.schedules = new_schedules
+                        st.session_state.cycle += 1
+                        st.session_state.standings = None
+                        st.session_state.relevant_ties = None
+                        st.session_state.skinny_results = {}
+                        st.session_state.locked_matches = {}
+                        st.session_state.match_queue = match_queue
+                        st.session_state.court_status = court_status
+                        st.session_state.court_queues = court_queues
+                        st.session_state.completed_matches = []
+                        save_state()
+                        st.rerun()
+
+            with col_b:
+                if st.button("Finish Session Now"):
+                    st.session_state.show_finish_pwd = True
+
+            if st.session_state.get("show_finish_pwd"):
+                pwd = st.text_input("Re-enter Admin Password to finish early", type="password", key="finish_pwd")
+                if pwd:
+                    if pwd == st.session_state.admin_password:
+                        for pname, ranking in st.session_state.standings.items():
+                            for r in ranking:
+                                st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
+                                st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
+                        st.session_state.assignment_history.append({
+                            "title": f"Rankings after Round {st.session_state.cycle}",
+                            "type": "rankings",
+                            "data": st.session_state.standings
+                        })
+                        st.session_state.final_done = True
+                        st.session_state.show_finish_pwd = False
+                        save_state()
+                        st.rerun()
+                    else:
+                        st.error("Wrong password")
+
+    # ---------- FINAL RESULTS ----------
+    if st.session_state.get("final_done"):
+        st.markdown("---")
+        st.header("Final Results")
+
+        st.subheader("Top 3 Overall for the Day (Total +/−)")
+        cum = st.session_state.cumulative
+        overall_list = sorted(cum.items(), key=lambda x: (x[1]["diff"], x[1]["wins"]), reverse=True)
+        for medal, (name, s) in assign_medals(overall_list, key_func=lambda x: (x[1]["diff"], x[1]["wins"])):
+            st.write(f"{medal} **{name}**  —  +/− {s['diff']:+d}  (Matches Won: {s['wins']})")
+
+        st.subheader("Top 3 from Final Top Pool")
+        if st.session_state.standings and pool_names:
+            top_pool = st.session_state.standings.get(pool_names[0], [])
+            for medal, r in assign_medals(top_pool, key_func=lambda x: (x["diff"], x["wins"])):
+                st.write(f"{medal} **{r['name']}**  —  +/− {r['diff']:+d}")
+
+        st.success("Session complete!")
+
+        # Update Overall Ladder
+        try:
+            final_order = []
+            if st.session_state.standings:
+                for pname in pool_names:
+                    for r in st.session_state.standings.get(pname, []):
+                        final_order.append(r["name"])
+            update_overall_ladder_from_session(final_order)
+            st.info("Overall Ladder has been updated.")
+        except Exception as e:
+            st.warning(f"Could not update Overall Ladder: {e}")
+
+        st.markdown("---")
+        st.subheader("Download Session Report")
+        try:
+            excel_data = create_excel_report()
+            st.download_button(
+                label="📥 Download Excel Report",
+                data=excel_data,
+                file_name="pickleball_session_report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.warning(f"Could not generate Excel: {e}")
+
+if st.session_state.get("created"):
+    save_state()
