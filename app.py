@@ -1,7 +1,3 @@
-Here’s the **full corrected script**.  
-
-Replace the entire contents of your `app.py` with this version. It includes all the Supabase changes we made and restores the missing `smart_distribute` function.
-
 ```python
 import streamlit as st
 import pandas as pd
