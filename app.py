@@ -94,12 +94,24 @@ def update_overall_ladder_from_session(cumulative):
         st.warning(f"Could not update Overall Ladder: {e}")
         return []
 
+# ---------- Hall of Fame helpers ----------
+def load_hof():
+    try:
+        result = supabase.table("hall_of_fame").select("*").order("championships", desc=True).execute()
+        return result.data if result.data else []
+    except Exception as e:
+        st.warning(f"Could not load Hall of Fame: {e}")
+        return []
+
 def add_to_hall_of_fame(player_name):
     try:
         existing = supabase.table("hall_of_fame").select("*").eq("player_name", player_name).execute()
         if existing.data:
             current = existing.data[0].get("championships", 0)
-            supabase.table("hall_of_fame").update({"championships": current + 1}).eq("player_name", player_name).execute()
+            supabase.table("hall_of_fame").update({
+                "championships": current + 1,
+                "last_season": str(date.today())
+            }).eq("player_name", player_name).execute()
         else:
             supabase.table("hall_of_fame").insert({
                 "player_name": player_name,
@@ -267,13 +279,17 @@ if "show_reset_ladder" not in st.session_state:
     st.session_state.show_reset_ladder = False
 if "show_ladder_page" not in st.session_state:
     st.session_state.show_ladder_page = False
+if "show_hof_page" not in st.session_state:
+    st.session_state.show_hof_page = False
 if "show_end_season" not in st.session_state:
     st.session_state.show_end_season = False
+if "show_reset_hof" not in st.session_state:
+    st.session_state.show_reset_hof = False
 if "player_notes" not in st.session_state:
     st.session_state.player_notes = {}
 
 # ---------- Top Bar ----------
-c1, c2, c3, c4, c5, c6 = st.columns([1.4, 1.4, 1.4, 1.4, 1.4, 1.4])
+c1, c2, c3, c4, c5, c6, c7 = st.columns([1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3])
 
 with c1:
     if not st.session_state.admin_unlocked:
@@ -290,6 +306,10 @@ with c2:
         st.session_state.show_ladder_page = not st.session_state.show_ladder_page
 
 with c3:
+    if st.button("🏆 Hall of Fame"):
+        st.session_state.show_hof_page = not st.session_state.show_hof_page
+
+with c4:
     if st.session_state.admin_unlocked:
         if st.button("Start New Session"):
             for key in list(st.session_state.keys()):
@@ -302,17 +322,17 @@ with c3:
             st.session_state.admin_unlocked = True
             st.rerun()
 
-with c4:
+with c5:
     if st.session_state.admin_unlocked:
         if st.button("Change Password"):
             st.session_state.show_change_password = True
 
-with c5:
+with c6:
     if st.session_state.admin_unlocked:
         if st.button("Reset Ladder"):
             st.session_state.show_reset_ladder = True
 
-with c6:
+with c7:
     if st.session_state.admin_unlocked:
         if st.button("End Season"):
             st.session_state.show_end_season = True
@@ -370,6 +390,20 @@ if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
     elif pwd:
         st.error("Wrong password")
 
+if st.session_state.get("show_reset_hof") and st.session_state.admin_unlocked:
+    st.warning("This will permanently delete the Hall of Fame.")
+    pwd = st.text_input("Admin Password to Reset Hall of Fame", type="password", key="reset_hof_pwd")
+    if pwd == st.session_state.admin_password:
+        try:
+            supabase.table("hall_of_fame").delete().neq("id", 0).execute()
+            st.session_state.show_reset_hof = False
+            st.success("Hall of Fame has been reset.")
+            st.rerun()
+        except Exception as e:
+            st.error(str(e))
+    elif pwd:
+        st.error("Wrong password")
+
 st.markdown("---")
 
 # ---------- Overall Ladder Page ----------
@@ -396,6 +430,64 @@ if st.session_state.show_ladder_page:
         st.info("Overall Ladder is empty.")
     if st.button("Close Overall Ladder"):
         st.session_state.show_ladder_page = False
+        st.rerun()
+    st.markdown("---")
+
+# ---------- Hall of Fame Page ----------
+if st.session_state.show_hof_page:
+    st.header("🏆 Hall of Fame")
+    hof = load_hof()
+    if hof:
+        rows = []
+        for i, p in enumerate(hof):
+            medal = ""
+            if i == 0: medal = "🥇 "
+            elif i == 1: medal = "🥈 "
+            elif i == 2: medal = "🥉 "
+            rows.append({
+                "Rank": f"{medal}{i+1}",
+                "Player": p["player_name"],
+                "Championships": p.get("championships", 0),
+                "Last Season": p.get("last_season", "-")
+            })
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    else:
+        st.info("Hall of Fame is empty.")
+
+    if st.session_state.admin_unlocked:
+        st.markdown("---")
+        st.subheader("Admin: Edit / Reset Hall of Fame")
+        if st.button("Reset Hall of Fame"):
+            st.session_state.show_reset_hof = True
+            st.rerun()
+
+        # Simple edit
+        st.write("Add or update a player manually:")
+        edit_name = st.text_input("Player name")
+        edit_champs = st.number_input("Championships", min_value=0, value=1)
+        if st.button("Save to Hall of Fame"):
+            if edit_name.strip():
+                try:
+                    existing = supabase.table("hall_of_fame").select("*").eq("player_name", edit_name.strip()).execute()
+                    if existing.data:
+                        supabase.table("hall_of_fame").update({
+                            "championships": edit_champs,
+                            "last_season": str(date.today())
+                        }).eq("player_name", edit_name.strip()).execute()
+                    else:
+                        supabase.table("hall_of_fame").insert({
+                            "player_name": edit_name.strip(),
+                            "championships": edit_champs,
+                            "last_season": str(date.today()),
+                            "notes": "Manual entry"
+                        }).execute()
+                    st.success("Updated")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+    if st.button("Close Hall of Fame"):
+        st.session_state.show_hof_page = False
         st.rerun()
     st.markdown("---")
 
@@ -684,7 +776,6 @@ if st.session_state.get("created"):
                     ranking.sort(key=lambda x: (x["diff"], x["wins"]), reverse=True)
                     standings[pname] = ranking
 
-                    # Skinny singles detection
                     n = len(ranking)
                     move_n = min(movers, n // 2) if n >= 2 else 0
                     ties = []
@@ -759,7 +850,6 @@ if st.session_state.get("created"):
             with col_a:
                 if st.session_state.cycle < num_cycles and not has_conflict:
                     if st.button("Apply Movement & Start Next Round", type="primary"):
-                        # Add this round's results to cumulative
                         for pname, ranking in st.session_state.standings.items():
                             for r in ranking:
                                 st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
@@ -771,7 +861,6 @@ if st.session_state.get("created"):
                             "data": st.session_state.standings
                         })
 
-                        # === FULL MOVEMENT LOGIC ===
                         final_rankings = st.session_state.standings
                         new_pools = {name: [] for name in pool_names}
                         display_data = {name: [] for name in pool_names}
@@ -829,7 +918,6 @@ if st.session_state.get("created"):
                             "data": display_data
                         })
 
-                        # New schedules and scores
                         new_schedules = {p: generate_schedule(pl) for p, pl in new_pools.items()}
                         new_scores = {}
                         for pname, schedule in new_schedules.items():
@@ -840,7 +928,6 @@ if st.session_state.get("created"):
 
                         st.session_state.scores.update(new_scores)
 
-                        # Rebuild court board
                         match_queue = []
                         court_status = {c: None for c in court_names}
                         court_queues = {}
@@ -887,11 +974,39 @@ if st.session_state.get("created"):
     if st.session_state.get("final_done"):
         st.markdown("---")
         st.header("Final Results")
+
         cum = st.session_state.cumulative
         overall_list = sorted(cum.items(), key=lambda x: (x[1]["diff"], x[1]["wins"]), reverse=True)
-        st.subheader("Top 3 Overall for the Day")
+
+        st.subheader("Top 3 Overall for the Day (Total +/−)")
         for medal, (name, s) in assign_medals(overall_list, key_func=lambda x: (x[1]["diff"], x[1]["wins"])):
-            st.write(f"{medal} **{name}** — +/− {s['diff']:+d}")
+            st.write(f"{medal} **{name}** — +/− {s['diff']:+d}  (Wins: {s['wins']})")
+
+        st.subheader("Top 3 from Final Top Pool")
+        if st.session_state.standings and pool_names:
+            top_pool = st.session_state.standings.get(pool_names[0], [])
+            for medal, r in assign_medals(top_pool, key_func=lambda x: (x["diff"], x["wins"])):
+                st.write(f"{medal} **{r['name']}** — +/− {r['diff']:+d}")
+
+        st.subheader("Biggest Climbers")
+        initial_ranks = st.session_state.get("initial_ranks", {})
+        final_ranks = {}
+        rank_counter = 1
+        if st.session_state.standings:
+            for pname in pool_names:
+                for r in st.session_state.standings.get(pname, []):
+                    final_ranks[r["name"]] = rank_counter
+                    rank_counter += 1
+
+        climbers = []
+        for name, start_rank in initial_ranks.items():
+            final_rank = final_ranks.get(name)
+            if final_rank is not None:
+                climbed = start_rank - final_rank
+                climbers.append({"name": name, "climbed": climbed, "start": start_rank, "final": final_rank})
+        climbers.sort(key=lambda x: x["climbed"], reverse=True)
+        for medal, c in assign_medals(climbers, key_func=lambda x: x["climbed"]):
+            st.write(f"{medal} **{c['name']}** — Climbed **{c['climbed']:+d}** positions (#{c['start']} → #{c['final']})")
 
         st.success("Session complete! Overall Ladder has been updated.")
 
@@ -899,7 +1014,11 @@ if st.session_state.get("created"):
         try:
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                pd.DataFrame({"Player": list(cum.keys()), "+/−": [v["diff"] for v in cum.values()], "Wins": [v["wins"] for v in cum.values()]}).to_excel(writer, index=False)
+                pd.DataFrame({
+                    "Player": list(cum.keys()),
+                    "+/−": [v["diff"] for v in cum.values()],
+                    "Wins": [v["wins"] for v in cum.values()]
+                }).to_excel(writer, index=False)
             st.download_button("📥 Download Excel Report", output.getvalue(), "pickleball_session_report.xlsx")
         except Exception as e:
             st.warning(str(e))
