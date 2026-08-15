@@ -416,21 +416,17 @@ if st.session_state.get("show_reset_hof") and st.session_state.admin_unlocked:
     pwd = st.text_input("Enter Admin Password to confirm Reset", type="password", key="reset_hof_pwd")
     if pwd:
         if pwd == st.session_state.admin_password:
-            save_hof({})
-            if os.path.exists(HOF_FILE):
-                try:
-                    os.remove(HOF_FILE)
-                except Exception:
-                    pass
-            save_hof({})
-            st.session_state.show_reset_hof = False
-            st.session_state.hof_priority_players = []
-            st.success("✅ Hall of Fame has been completely reset and is now empty.")
-            st.rerun()
+            try:
+                # Delete all rows from the hall_of_fame table
+                supabase.table("hall_of_fame").delete().neq("id", 0).execute()
+                st.session_state.show_reset_hof = False
+                st.session_state.hof_priority_players = []
+                st.success("✅ Hall of Fame has been completely reset and is now empty.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to reset Hall of Fame: {e}")
         else:
             st.error("Wrong password")
-
-st.markdown("---")
 
 # ---------- Hall of Fame Page ----------
 if st.session_state.show_hof_page:
