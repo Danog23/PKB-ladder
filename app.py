@@ -252,11 +252,11 @@ with c3:
             for key in list(st.session_state.keys()):
                 if key not in ["admin_password", "admin_unlocked"]:
                     del st.session_state[key]
-            if os.path.exists(SAVE_FILE):
-                try:
-                    os.remove(SAVE_FILE)
-                except Exception:
-                    pass
+            try:
+                # Clear the active session in Supabase
+                supabase.table("active_session").delete().neq("id", 0).execute()
+            except Exception:
+                pass
             st.session_state.admin_unlocked = True
             st.rerun()
 
