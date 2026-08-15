@@ -26,38 +26,38 @@ st.info("**Note:** If you don’t see the latest scores or rankings, please **re
 SAVE_FILE = "pickleball_session.json"
 HOF_FILE = "hall_of_fame.json"
 
-# ---------- Hall of Fame helpers ----------
+# ---------- Hall of Fame helpers (Supabase) ----------
 def load_hof():
-    if not os.path.exists(HOF_FILE):
-        return {}
     try:
-        with open(HOF_FILE, "r") as f:
-            data = json.load(f)
-            if not isinstance(data, dict):
-                return {}
-            return data
-    except Exception:
+        result = supabase.table("hall_of_fame").select("*").execute()
+        hof = {}
+        for row in result.data:
+            hof[row["player_name"]] = {
+                "diff": 0,
+                "wins": 0,
+                "sessions": 0,
+                "championships": row.get("championships", 0)
+            }
+        return hof
+    except Exception as e:
+        st.warning(f"Could not load Hall of Fame: {e}")
         return {}
 
 def save_hof(hof_data):
-    try:
-        with open(HOF_FILE, "w") as f:
-            json.dump(hof_data, f, indent=2)
-        return True
-    except Exception:
-        return False
+    # Kept for compatibility – not used the same way with Supabase
+    pass
 
 def get_top5_with_ranks(hof_data):
     if not hof_data:
         return []
     items = list(hof_data.items())
-    items.sort(key=lambda x: (x[1].get("diff", 0), x[1].get("wins", 0)), reverse=True)
+    items.sort(key=lambda x: (x[1].get("championships", 0), x[1].get("diff", 0)), reverse=True)
 
     ranked = []
     current_rank = 0
     prev_key = None
     for name, stats in items:
-        key = (stats.get("diff", 0), stats.get("wins", 0))
+        key = (stats.get("championships", 0), stats.get("diff", 0))
         if key != prev_key:
             current_rank += 1
         if current_rank > 5:
@@ -67,15 +67,20 @@ def get_top5_with_ranks(hof_data):
     return ranked
 
 def update_hof_from_session(cumulative):
-    hof = load_hof()
-    for name, stats in cumulative.items():
-        if name not in hof:
-            hof[name] = {"diff": 0, "wins": 0, "sessions": 0}
-        hof[name]["diff"] += stats.get("diff", 0)
-        hof[name]["wins"] += stats.get("wins", 0)
-        hof[name]["sessions"] = hof[name].get("sessions", 0) + 1
-    save_hof(hof)
-    return hof
+    try:
+        for name, stats in cumulative.items():
+            existing = supabase.table("hall_of_fame").select("*").eq("player_name", name).execute()
+            if existing.data:
+                pass  # We will improve this later with season points
+            else:
+                supabase.table("hall_of_fame").insert({
+                    "player_name": name,
+                    "championships": 0
+                }).execute()
+        return load_hof()
+    except Exception as e:
+        st.warning(f"Could not update Hall of Fame: {e}")
+        return {}
 
 # ---------- Excel export ----------
 def create_excel_report():
