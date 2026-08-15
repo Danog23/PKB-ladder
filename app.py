@@ -8,7 +8,6 @@ import random
 from io import BytesIO
 from supabase import create_client, Client
 
-# ---------- Supabase connection ----------
 @st.cache_resource
 def get_supabase() -> Client:
     url = st.secrets["supabase"]["url"]
@@ -22,7 +21,6 @@ st.title("Pickleball Multi-Court Ladder")
 
 st.info("**Note:** If you don’t see the latest scores or rankings, please **refresh the page** or **open the link again**.")
 
-# ---------- Hall of Fame helpers (Supabase) ----------
 def load_hof():
     try:
         result = supabase.table("hall_of_fame").select("*").execute()
@@ -75,7 +73,6 @@ def update_hof_from_session(cumulative):
         st.warning(f"Could not update Hall of Fame: {e}")
         return {}
 
-# ---------- Excel export ----------
 def create_excel_report():
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -123,7 +120,6 @@ def create_excel_report():
     output.seek(0)
     return output
 
-# ---------- Session save / load (Supabase) ----------
 def save_state():
     if not st.session_state.get("created"):
         return
@@ -296,7 +292,6 @@ def build_court_queues(schedules, pool_names, court_names):
         court_queues[court] = queue
     return court_queues
 
-# ---------- Initialize ----------
 if "admin_unlocked" not in st.session_state:
     st.session_state.admin_unlocked = False
 if "admin_password" not in st.session_state:
@@ -332,7 +327,6 @@ if "show_hof_page" not in st.session_state:
 if "hof_priority_players" not in st.session_state:
     st.session_state.hof_priority_players = []
 
-# ---------- Top Admin Bar ----------
 c1, c2, c3, c4, c5 = st.columns([1.6, 1.6, 1.6, 1.6, 1.6])
 
 with c1:
@@ -372,7 +366,6 @@ with c5:
         if st.button("Reset HoF"):
             st.session_state.show_reset_hof = True
 
-# Admin login
 if st.session_state.get("show_admin_login") and not st.session_state.admin_unlocked:
     pwd = st.text_input("Enter Admin Password", type="password", key="admin_login")
     if pwd:
@@ -383,7 +376,6 @@ if st.session_state.get("show_admin_login") and not st.session_state.admin_unloc
         else:
             st.error("Wrong password")
 
-# Change password
 if st.session_state.get("show_change_password") and st.session_state.admin_unlocked:
     st.markdown("### Change Admin Password")
     old = st.text_input("Current password", type="password", key="old_pwd")
@@ -398,7 +390,6 @@ if st.session_state.get("show_change_password") and st.session_state.admin_unloc
         else:
             st.error("Current password incorrect or new password too short")
 
-# Reset Hall of Fame
 if st.session_state.get("show_reset_hof") and st.session_state.admin_unlocked:
     st.warning("This will permanently delete the Hall of Fame rankings.")
     pwd = st.text_input("Enter Admin Password to confirm Reset", type="password", key="reset_hof_pwd")
@@ -417,7 +408,6 @@ if st.session_state.get("show_reset_hof") and st.session_state.admin_unlocked:
 
 st.markdown("---")
 
-# ---------- Hall of Fame Page ----------
 if st.session_state.show_hof_page:
     st.header("🏆 Hall of Fame – Top 5")
     hof_data = load_hof()
@@ -433,7 +423,6 @@ if st.session_state.show_hof_page:
         st.rerun()
     st.markdown("---")
 
-# ---------- Session Setup ----------
 if st.session_state.admin_unlocked and not st.session_state.get("created"):
     st.header("1. Session Setup (Admin)")
 
@@ -604,7 +593,6 @@ Skyler, 3.9"""
                 save_state()
                 st.rerun()
 
-# ---------- Main App (when session is created) ----------
 if st.session_state.get("created"):
     is_admin = st.session_state.admin_unlocked
     pools = st.session_state.pools
@@ -617,10 +605,8 @@ if st.session_state.get("created"):
     play_to = st.session_state.play_to
     use_shared = st.session_state.use_shared_courts
 
-    # Session settings summary
     st.caption(f"Courts: {st.session_state.num_courts} | Pools: {num_pools} | Players/pool: {st.session_state.players_per_pool} | Movers: {movers} | Rounds: {num_cycles} | Play to: {play_to}")
 
-    # Show assignment history
     for entry in st.session_state.get("assignment_history", []):
         st.subheader(entry["title"])
         if entry["type"] == "groups":
@@ -646,7 +632,6 @@ if st.session_state.get("created"):
                         note = f" {r['Note']}" if r.get("Note") else ""
                         st.write(f"- {r['Player']}{note}")
 
-    # ---------- COURT BOARD ----------
     if not st.session_state.get("standings") and not st.session_state.get("final_done"):
         st.markdown("---")
         st.header(f"Court Board – Round {st.session_state.cycle}")
@@ -841,7 +826,6 @@ if st.session_state.get("created"):
                 save_state()
                 st.rerun()
 
-    # ==================== RANKINGS + MOVEMENT ====================
     if st.session_state.get("standings") and not st.session_state.get("final_done"):
         st.markdown("---")
         st.header(f"Rankings after Round {st.session_state.cycle}")
@@ -1031,7 +1015,6 @@ if st.session_state.get("created"):
                     else:
                         st.error("Wrong password")
 
-    # ==================== FINAL RESULTS ====================
     if st.session_state.get("final_done"):
         st.markdown("---")
         st.header("Final Results")
@@ -1096,6 +1079,3 @@ if st.session_state.get("created"):
 
 if st.session_state.get("created"):
     save_state()
-```
-
-Replace the entire `app.py` with the code above, commit it, and then test the app again.
