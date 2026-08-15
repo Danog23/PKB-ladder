@@ -119,8 +119,10 @@ def add_to_hall_of_fame(player_name):
                 "last_season": str(date.today()),
                 "notes": "Season Champion"
             }).execute()
+        return True
     except Exception as e:
         st.error(f"Could not add to Hall of Fame: {e}")
+        return False
 
 def save_state():
     if not st.session_state.get("created"):
@@ -130,7 +132,7 @@ def save_state():
         "num_courts", "num_pools", "players_per_pool", "movers", "num_cycles",
         "cycle", "standings", "relevant_ties", "skinny_results", "cumulative",
         "assignment_history", "final_done", "admin_password", "cycle_snapshots",
-        "play_to", "full_score_history", "locked_matches", "initial_ranks",
+        "play_to", "play_to_5", "full_score_history", "locked_matches", "initial_ranks",
         "use_shared_courts", "match_queue", "court_status", "completed_matches",
         "court_queues", "player_notes"
     ]}
@@ -188,18 +190,44 @@ def generate_schedule(players):
         return rounds
     return []
 
-def smart_distribute(n_players, preferred_pools, preferred_size, min_size=3):
-    max_possible = preferred_pools * preferred_size
-    n = min(n_players, max_possible)
-    for num_pools in range(preferred_pools, 0, -1):
-        if n < num_pools * min_size:
+def smart_distribute(n_players, preferred_pools, preferred_size):
+    """
+    Create pool sizes.
+    - Prefer preferred_size
+    - Allow 4, 5, 6
+    - Prefer avoiding 6 when possible
+    - Larger pools go to the end (bottom)
+    """
+    if n_players < 3:
+        return []
+
+    # Try different number of pools around the preferred number
+    best = None
+    for num_pools in range(max(1, preferred_pools - 1), preferred_pools + 3):
+        if num_pools * 3 > n_players:
             continue
-        base = n // num_pools
-        rem = n % num_pools
-        sizes = [base + (1 if i < rem else 0) for i in range(num_pools)]
-        if all(s >= min_size for s in sizes):
-            return sizes
-    return [n] if n >= min_size else []
+        if num_pools * 6 < n_players:
+            continue
+
+        base = n_players // num_pools
+        rem = n_players % num_pools
+
+        # We want larger pools at the bottom
+        sizes = [base] * num_pools
+        for i in range(rem):
+            sizes[-(i + 1)] += 1   # add extra players to the bottom pools
+
+        # Validate sizes (only 4, 5 or 6)
+        if all(3 <= s <= 6 for s in sizes):
+            # Prefer solutions that avoid 6 if possible
+            has_six = any(s == 6 for s in sizes)
+            score = (has_six, abs(num_pools - preferred_pools), abs(base - preferred_size))
+            if best is None or score < best[0]:
+                best = (score, sizes)
+
+    if best:
+        return best[1]
+    return []
 
 def assign_medals(sorted_list, key_func):
     if not sorted_list:
@@ -375,16 +403,19 @@ if st.session_state.get("show_reset_ladder") and st.session_state.admin_unlocked
         st.error("Wrong password")
 
 if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
-    st.warning("This will end the current season and add the #1 player to the Hall of Fame.")
+    st.warning("This will end the current season and add the #1 player on the Overall Ladder to the Hall of Fame.")
     pwd = st.text_input("Admin Password to End Season", type="password", key="end_season_pwd")
     if pwd == st.session_state.admin_password:
         ladder = get_top10_ladder()
         if ladder:
             champion = ladder[0]["player_name"]
-            add_to_hall_of_fame(champion)
-            st.success(f"Season ended! **{champion}** has been added to the Hall of Fame.")
+            success = add_to_hall_of_fame(champion)
+            if success:
+                st.success(f"✅ Season ended successfully!\n\n**{champion}** has been added to the Hall of Fame.")
+            else:
+                st.error("Failed to add champion to Hall of Fame.")
         else:
-            st.info("Overall Ladder is empty.")
+            st.info("Overall Ladder is empty — no champion to add.")
         st.session_state.show_end_season = False
         st.rerun()
     elif pwd:
@@ -452,17 +483,16 @@ if st.session_state.show_hof_page:
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     else:
-        st.info("Hall of Fame is empty.")
+        st.info("Hall of Fame is empty. Only season winners appear here.")
 
     if st.session_state.admin_unlocked:
         st.markdown("---")
-        st.subheader("Admin: Edit / Reset Hall of Fame")
+        st.subheader("Admin Controls")
         if st.button("Reset Hall of Fame"):
             st.session_state.show_reset_hof = True
             st.rerun()
 
-        # Simple edit
-        st.write("Add or update a player manually:")
+        st.write("Manually add / update a player:")
         edit_name = st.text_input("Player name")
         edit_champs = st.number_input("Championships", min_value=0, value=1)
         if st.button("Save to Hall of Fame"):
@@ -508,10 +538,12 @@ if st.session_state.admin_unlocked and not st.session_state.get("created"):
     with col5:
         num_cycles = st.number_input("Number of rounds", 1, 6, 3)
     with col6:
-        play_to = st.number_input("Play to", 7, 21, 9)
+        play_to = st.number_input("Play to (normal pools)", 7, 21, 9)
 
-    max_players = preferred_pools * preferred_size
-    st.caption(f"Maximum capacity: **{max_players}** players.")
+    play_to_5 = st.number_input("Play to for 5-player pools", 7, 21, 7)
+
+    max_players = preferred_pools * 6
+    st.caption(f"Maximum capacity roughly **{max_players}** players (flexible).")
 
     st.header("2. Enter Players")
     st.caption("Format: Name, DUPR. Returning players keep Overall Ladder order. New players inserted by DUPR.")
@@ -543,8 +575,6 @@ Skyler, 3.9"""
 
         if len(players) < 3:
             st.error("Need at least 3 players")
-        elif len(players) > max_players:
-            st.error(f"Too many players (max {max_players})")
         else:
             overall = load_overall_ladder()
             overall_names = [p["player_name"] for p in overall]
@@ -574,10 +604,10 @@ Skyler, 3.9"""
                 player_notes[np["name"]] = f"New Player (DUPR {np['dupr']})"
 
             players = final_players
-            sizes = smart_distribute(len(players), preferred_pools, preferred_size, 3)
+            sizes = smart_distribute(len(players), preferred_pools, preferred_size)
 
             if not sizes:
-                st.error("Could not create valid pools")
+                st.error("Could not create valid pools with the current player count.")
             else:
                 actual_pools = len(sizes)
                 use_shared = actual_pools > num_courts
@@ -590,15 +620,20 @@ Skyler, 3.9"""
                     pool_names.append(pname)
                     idx += size
 
+                size_str = " + ".join(str(s) for s in sizes)
+                st.success(f"Created pools: **{size_str}** (larger pools at the bottom)")
+
                 court_names = [f"Court {i+1}" for i in range(num_courts)]
                 schedules = {p: generate_schedule(pl) for p, pl in pools.items()}
 
                 scores = {}
                 for pname, schedule in schedules.items():
+                    pool_size = len(pools[pname])
+                    target = play_to_5 if pool_size >= 5 else play_to
                     for r_idx, rnd in enumerate(schedule):
                         for m_idx, match in enumerate([x for x in rnd if is_match(x)]):
                             key = f"{pname}_r{r_idx}_m{m_idx}"
-                            scores[key] = (play_to, play_to - 1) if random.random() < 0.5 else (play_to - 1, play_to)
+                            scores[key] = (target, target - 1) if random.random() < 0.5 else (target - 1, target)
 
                 cumulative = {p["name"]: {"diff": 0, "wins": 0} for p in players}
                 initial_ranks = {p["name"]: i + 1 for i, p in enumerate(players)}
@@ -633,6 +668,7 @@ Skyler, 3.9"""
                 st.session_state.movers = movers
                 st.session_state.num_cycles = num_cycles
                 st.session_state.play_to = play_to
+                st.session_state.play_to_5 = play_to_5
                 st.session_state.use_shared_courts = use_shared
                 st.session_state.created = True
                 st.session_state.cycle = 1
@@ -661,10 +697,11 @@ if st.session_state.get("created"):
     movers = st.session_state.movers
     num_cycles = st.session_state.num_cycles
     play_to = st.session_state.play_to
+    play_to_5 = st.session_state.get("play_to_5", 7)
     use_shared = st.session_state.use_shared_courts
     player_notes = st.session_state.get("player_notes", {})
 
-    st.caption(f"Courts: {st.session_state.num_courts} | Pools: {num_pools} | Players/pool: {st.session_state.players_per_pool} | Movers: {movers} | Rounds: {num_cycles} | Play to: {play_to}")
+    st.caption(f"Courts: {st.session_state.num_courts} | Pools: {num_pools} | Movers: {movers} | Rounds: {num_cycles} | Play to: {play_to} (5-player: {play_to_5})")
 
     for entry in st.session_state.get("assignment_history", []):
         st.subheader(entry["title"])
@@ -672,7 +709,7 @@ if st.session_state.get("created"):
             cols = st.columns(min(len(entry["data"]), 4))
             for i, (pname, plist) in enumerate(entry["data"].items()):
                 with cols[i % len(cols)]:
-                    st.markdown(f"**{pname}**")
+                    st.markdown(f"**{pname}** ({len(plist)} players)")
                     data = []
                     for p in plist:
                         note = player_notes.get(p["name"], "")
@@ -701,7 +738,9 @@ if st.session_state.get("created"):
             if status:
                 t1, t2 = status["match"]
                 key = status["key"]
-                current = st.session_state.scores.get(key, (play_to, play_to - 1))
+                pool_size = len(pools.get(status["pool"], []))
+                target = play_to_5 if pool_size >= 5 else play_to
+                current = st.session_state.scores.get(key, (target, target - 1))
 
                 st.subheader(f"{court} | {status['pool']} Match {status['round']}")
                 col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
@@ -921,10 +960,12 @@ if st.session_state.get("created"):
                         new_schedules = {p: generate_schedule(pl) for p, pl in new_pools.items()}
                         new_scores = {}
                         for pname, schedule in new_schedules.items():
+                            pool_size = len(new_pools[pname])
+                            target = play_to_5 if pool_size >= 5 else play_to
                             for r_idx, rnd in enumerate(schedule):
                                 for m_idx, match in enumerate([x for x in rnd if is_match(x)]):
                                     key = f"{pname}_r{r_idx}_m{m_idx}"
-                                    new_scores[key] = (play_to, play_to - 1) if random.random() < 0.5 else (play_to - 1, play_to)
+                                    new_scores[key] = (target, target - 1) if random.random() < 0.5 else (target - 1, target)
 
                         st.session_state.scores.update(new_scores)
 
