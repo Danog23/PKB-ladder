@@ -19,7 +19,7 @@ st.set_page_config(page_title="Pickleball Pool Ladder", layout="wide")
 st.title("Pickleball Multi-Court Ladder")
 st.info("**Note:** If you don’t see the latest scores or rankings, please **refresh the page** or **open the link again**.")
 
-# ---------- Overall Ladder (pure cumulative +/−) ----------
+# ---------- Overall Ladder helpers ----------
 def load_overall_ladder():
     try:
         result = supabase.table("master_ladder").select("*").order("current_rank").execute()
@@ -28,11 +28,18 @@ def load_overall_ladder():
         st.warning(f"Could not load Overall Ladder: {e}")
         return []
 
+def parse_notes(notes):
+    diff = wins = sessions = 0
+    try:
+        parts = dict(item.split(":") for item in notes.split("|") if ":" in item)
+        diff = int(parts.get("diff", 0))
+        wins = int(parts.get("wins", 0))
+        sessions = int(parts.get("sessions", 0))
+    except:
+        pass
+    return diff, wins, sessions
+
 def save_overall_ladder(players_stats):
-    """
-    players_stats = list of dicts: [{"name": , "diff": , "wins": , "sessions": }, ...]
-    Sorted by diff then wins (highest first)
-    """
     try:
         supabase.table("master_ladder").delete().neq("id", 0).execute()
         rows = []
@@ -53,24 +60,12 @@ def get_top10_ladder():
     return load_overall_ladder()[:10]
 
 def update_overall_ladder_from_session(cumulative):
-    """
-    cumulative = {name: {"diff": x, "wins": y}, ...} from this session
-    We add this session's numbers to the existing totals.
-    """
+    """Only call this when the session is properly finished."""
     try:
         current = load_overall_ladder()
         current_dict = {}
         for row in current:
-            # parse notes
-            notes = row.get("notes", "")
-            diff = wins = sessions = 0
-            try:
-                parts = dict(item.split(":") for item in notes.split("|") if ":" in item)
-                diff = int(parts.get("diff", 0))
-                wins = int(parts.get("wins", 0))
-                sessions = int(parts.get("sessions", 0))
-            except:
-                pass
+            diff, wins, sessions = parse_notes(row.get("notes", ""))
             current_dict[row["player_name"]] = {
                 "name": row["player_name"],
                 "dupr": row.get("dupr", 0),
@@ -79,7 +74,6 @@ def update_overall_ladder_from_session(cumulative):
                 "sessions": sessions
             }
 
-        # Add this session's results
         for name, stats in cumulative.items():
             if name in current_dict:
                 current_dict[name]["diff"] += stats.get("diff", 0)
@@ -94,17 +88,28 @@ def update_overall_ladder_from_session(cumulative):
                     "sessions": 1
                 }
 
-        # Sort by total diff then wins
-        sorted_list = sorted(
-            current_dict.values(),
-            key=lambda x: (x["diff"], x["wins"]),
-            reverse=True
-        )
+        sorted_list = sorted(current_dict.values(), key=lambda x: (x["diff"], x["wins"]), reverse=True)
         save_overall_ladder(sorted_list)
         return sorted_list
     except Exception as e:
         st.warning(f"Could not update Overall Ladder: {e}")
         return []
+
+def add_to_hall_of_fame(player_name):
+    try:
+        existing = supabase.table("hall_of_fame").select("*").eq("player_name", player_name).execute()
+        if existing.data:
+            current = existing.data[0].get("championships", 0)
+            supabase.table("hall_of_fame").update({"championships": current + 1}).eq("player_name", player_name).execute()
+        else:
+            supabase.table("hall_of_fame").insert({
+                "player_name": player_name,
+                "championships": 1,
+                "last_season": str(date.today()),
+                "notes": "Season Champion"
+            }).execute()
+    except Exception as e:
+        st.error(f"Could not add to Hall of Fame: {e}")
 
 def create_excel_report():
     output = BytesIO()
@@ -134,7 +139,7 @@ def save_state():
         "assignment_history", "final_done", "admin_password", "cycle_snapshots",
         "play_to", "full_score_history", "locked_matches", "initial_ranks",
         "use_shared_courts", "match_queue", "court_status", "completed_matches",
-        "court_queues"
+        "court_queues", "player_notes"
     ]}
     try:
         supabase.table("active_session").delete().neq("id", 0).execute()
@@ -280,9 +285,13 @@ if "show_reset_ladder" not in st.session_state:
     st.session_state.show_reset_ladder = False
 if "show_ladder_page" not in st.session_state:
     st.session_state.show_ladder_page = False
+if "show_end_season" not in st.session_state:
+    st.session_state.show_end_season = False
+if "player_notes" not in st.session_state:
+    st.session_state.player_notes = {}
 
 # ---------- Top Bar ----------
-c1, c2, c3, c4, c5 = st.columns([1.6, 1.6, 1.6, 1.6, 1.6])
+c1, c2, c3, c4, c5, c6 = st.columns([1.4, 1.4, 1.4, 1.4, 1.4, 1.4])
 
 with c1:
     if not st.session_state.admin_unlocked:
@@ -321,6 +330,12 @@ with c5:
         if st.button("Reset Ladder"):
             st.session_state.show_reset_ladder = True
 
+with c6:
+    if st.session_state.admin_unlocked:
+        if st.button("End Season"):
+            st.session_state.show_end_season = True
+
+# Login / Password / Reset / End Season dialogs
 if st.session_state.get("show_admin_login") and not st.session_state.admin_unlocked:
     pwd = st.text_input("Enter Admin Password", type="password", key="admin_login")
     if pwd == st.session_state.admin_password:
@@ -357,6 +372,22 @@ if st.session_state.get("show_reset_ladder") and st.session_state.admin_unlocked
     elif pwd:
         st.error("Wrong password")
 
+if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
+    st.warning("This will end the current season and add the #1 player to the Hall of Fame.")
+    pwd = st.text_input("Admin Password to End Season", type="password", key="end_season_pwd")
+    if pwd == st.session_state.admin_password:
+        ladder = get_top10_ladder()
+        if ladder:
+            champion = ladder[0]["player_name"]
+            add_to_hall_of_fame(champion)
+            st.success(f"Season ended! **{champion}** has been added to the Hall of Fame.")
+        else:
+            st.info("Overall Ladder is empty – nothing to add.")
+        st.session_state.show_end_season = False
+        st.rerun()
+    elif pwd:
+        st.error("Wrong password")
+
 st.markdown("---")
 
 # ---------- Overall Ladder Page ----------
@@ -370,21 +401,13 @@ if st.session_state.show_ladder_page:
             if i == 0: medal = "🥇 "
             elif i == 1: medal = "🥈 "
             elif i == 2: medal = "🥉 "
-            # parse notes for display
-            notes = p.get("notes", "")
-            diff = wins = 0
-            try:
-                parts = dict(item.split(":") for item in notes.split("|") if ":" in item)
-                diff = int(parts.get("diff", 0))
-                wins = int(parts.get("wins", 0))
-            except:
-                pass
+            diff, wins, sessions = parse_notes(p.get("notes", ""))
             rows.append({
                 "Rank": f"{medal}{p['current_rank']}",
                 "Player": p["player_name"],
                 "Total +/−": diff,
                 "Wins": wins,
-                "Last Played": p.get("last_played", "-")
+                "Sessions": sessions
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     else:
@@ -449,9 +472,9 @@ Skyler, 3.9"""
         elif len(players) > max_players:
             st.error(f"Too many players (max {max_players})")
         else:
-            # Seeding: Overall Ladder order first, new players by DUPR
             overall = load_overall_ladder()
             overall_names = [p["player_name"] for p in overall]
+            overall_rank = {p["player_name"]: p["current_rank"] for p in overall}
 
             returning = [p for p in players if p["name"] in overall_names]
             new_players = [p for p in players if p["name"] not in overall_names]
@@ -459,8 +482,12 @@ Skyler, 3.9"""
             returning.sort(key=lambda p: overall_names.index(p["name"]))
             new_players.sort(key=lambda x: x["dupr"], reverse=True)
 
-            # Insert new players by DUPR into the list
             final_players = returning[:]
+            player_notes = {}
+
+            for p in returning:
+                player_notes[p["name"]] = f"Overall Ladder #{overall_rank.get(p['name'], '?')}"
+
             for np in new_players:
                 inserted = False
                 for i, rp in enumerate(final_players):
@@ -470,6 +497,7 @@ Skyler, 3.9"""
                         break
                 if not inserted:
                     final_players.append(np)
+                player_notes[np["name"]] = f"New Player (DUPR {np['dupr']})"
 
             players = final_players
             sizes = smart_distribute(len(players), preferred_pools, preferred_size, 3)
@@ -544,6 +572,7 @@ Skyler, 3.9"""
                 st.session_state.court_queues = court_queues
                 st.session_state.completed_matches = []
                 st.session_state.locked_matches = {}
+                st.session_state.player_notes = player_notes
                 save_state()
                 st.rerun()
 
@@ -559,6 +588,7 @@ if st.session_state.get("created"):
     num_cycles = st.session_state.num_cycles
     play_to = st.session_state.play_to
     use_shared = st.session_state.use_shared_courts
+    player_notes = st.session_state.get("player_notes", {})
 
     st.caption(f"Courts: {st.session_state.num_courts} | Pools: {num_pools} | Players/pool: {st.session_state.players_per_pool} | Movers: {movers} | Rounds: {num_cycles} | Play to: {play_to}")
 
@@ -569,23 +599,19 @@ if st.session_state.get("created"):
             for i, (pname, plist) in enumerate(entry["data"].items()):
                 with cols[i % len(cols)]:
                     st.markdown(f"**{pname}**")
-                    st.dataframe(pd.DataFrame([{"Player": p["name"], "DUPR": p["dupr"]} for p in plist]), hide_index=True, use_container_width=True)
+                    data = []
+                    for p in plist:
+                        note = player_notes.get(p["name"], "")
+                        data.append({"Player": p["name"], "DUPR": p["dupr"], "Note": note})
+                    st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
         elif entry["type"] == "rankings":
             cols = st.columns(min(len(entry["data"]), 4))
             for i, (pname, ranking) in enumerate(entry["data"].items()):
                 with cols[i % len(cols)]:
                     st.markdown(f"**{pname}**")
                     st.dataframe(pd.DataFrame([{"#": j+1, "Player": r["name"], "+/−": r["diff"], "W": r["wins"]} for j, r in enumerate(ranking)]), hide_index=True, use_container_width=True)
-        elif entry["type"] == "new_groups":
-            cols = st.columns(min(len(entry["data"]), 4))
-            for i, (pname, rows) in enumerate(entry["data"].items()):
-                with cols[i % len(cols)]:
-                    st.markdown(f"**{pname}**")
-                    st.dataframe(pd.DataFrame([{"Player": r["Player"], "Note": r.get("Note", "")} for r in rows]), hide_index=True, use_container_width=True)
 
-    # Court Board, Rankings, Movement and Final Results
-    # (Full logic from previous working version is included below)
-
+    # Court Board
     if not st.session_state.get("standings") and not st.session_state.get("final_done"):
         st.markdown("---")
         st.header(f"Court Board – Round {st.session_state.cycle}")
@@ -660,22 +686,6 @@ if st.session_state.get("created"):
                     ranking = [{"name": p["name"], "diff": diff[p["name"]], "wins": wins[p["name"]]} for p in pools[pname]]
                     ranking.sort(key=lambda x: (x["diff"], x["wins"]), reverse=True)
                     standings[pname] = ranking
-                    # simple tie detection for movement
-                    n = len(ranking)
-                    move_n = min(movers, n//2) if n >= 2 else 0
-                    ties = []
-                    if p_idx > 0 and move_n > 0:
-                        sc = (ranking[move_n-1]["diff"], ranking[move_n-1]["wins"])
-                        grp = [r["name"] for r in ranking if (r["diff"], r["wins"]) == sc]
-                        if len(grp) > move_n:
-                            ties.append({"zone": "top (move up)", "players": grp, "needed": move_n, "score": ranking[move_n-1]["diff"]})
-                    if p_idx < num_pools-1 and move_n > 0:
-                        sc = (ranking[-move_n]["diff"], ranking[-move_n]["wins"])
-                        grp = [r["name"] for r in ranking if (r["diff"], r["wins"]) == sc]
-                        if len(grp) > move_n:
-                            ties.append({"zone": "bottom (move down)", "players": grp, "needed": move_n, "score": ranking[-move_n]["diff"]})
-                    if ties:
-                        relevant_ties[pname] = ties
                 st.session_state.standings = standings
                 st.session_state.relevant_ties = relevant_ties
                 st.session_state.skinny_results = {}
@@ -700,7 +710,6 @@ if st.session_state.get("created"):
                             st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
                             st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
                     st.session_state.assignment_history.append({"title": f"Rankings after Round {st.session_state.cycle}", "type": "rankings", "data": st.session_state.standings})
-                    # simplified movement for this version
                     st.session_state.cycle += 1
                     st.session_state.standings = None
                     st.session_state.relevant_ties = None
@@ -714,6 +723,8 @@ if st.session_state.get("created"):
                         st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
                         st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
                 st.session_state.final_done = True
+                # ONLY update the Overall Ladder when the session is properly finished
+                update_overall_ladder_from_session(st.session_state.cumulative)
                 save_state()
                 st.rerun()
 
@@ -726,9 +737,7 @@ if st.session_state.get("created"):
         for medal, (name, s) in assign_medals(overall_list, key_func=lambda x: (x[1]["diff"], x[1]["wins"])):
             st.write(f"{medal} **{name}** — +/− {s['diff']:+d}")
 
-        # Update Overall Ladder with pure cumulative +/−
-        update_overall_ladder_from_session(st.session_state.cumulative)
-        st.success("Overall Ladder has been updated with this session’s +/−.")
+        st.success("Session complete! Overall Ladder has been updated.")
 
         st.markdown("---")
         try:
