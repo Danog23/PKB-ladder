@@ -7,6 +7,17 @@ import copy
 import random
 from io import BytesIO
 
+from supabase import create_client, Client
+
+# ---------- Supabase connection ----------
+@st.cache_resource
+def get_supabase() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
+
+supabase = get_supabase()
+
 st.set_page_config(page_title="Pickleball Pool Ladder", layout="wide")
 st.title("Pickleball Multi-Court Ladder")
 
