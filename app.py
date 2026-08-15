@@ -172,141 +172,27 @@ def save_state():
         "hof_priority_players": st.session_state.get("hof_priority_players", []),
     }
     try:
-        with open(SAVE_FILE, "w") as f:
-            json.dump(data, f)
-    except Exception:
-        pass
+        # Delete old active session and insert the new one
+        supabase.table("active_session").delete().neq("id", 0).execute()
+        supabase.table("active_session").insert({
+            "session_data": data
+        }).execute()
+    except Exception as e:
+        st.warning(f"Could not save session to Supabase: {e}")
 
 def load_state():
-    if not os.path.exists(SAVE_FILE):
-        return False
     try:
-        with open(SAVE_FILE, "r") as f:
-            data = json.load(f)
-        for key, value in data.items():
-            st.session_state[key] = value
-        st.session_state.created = True
-        return True
-    except Exception:
+        result = supabase.table("active_session").select("session_data").order("id", desc=True).limit(1).execute()
+        if result.data and len(result.data) > 0:
+            data = result.data[0]["session_data"]
+            for key, value in data.items():
+                st.session_state[key] = value
+            st.session_state.created = True
+            return True
         return False
-
-def is_match(item):
-    try:
-        return (
-            isinstance(item, (list, tuple))
-            and len(item) == 2
-            and isinstance(item[0], (list, tuple))
-            and len(item[0]) == 2
-            and isinstance(item[0][0], str)
-        )
-    except Exception:
+    except Exception as e:
+        st.warning(f"Could not load session from Supabase: {e}")
         return False
-
-def generate_schedule(players):
-    n = len(players)
-    names = [p["name"] for p in players]
-    if n < 3:
-        return []
-    if n == 4:
-        return [
-            [((names[0], names[1]), (names[2], names[3]))],
-            [((names[0], names[2]), (names[1], names[3]))],
-            [((names[0], names[3]), (names[1], names[2]))],
-        ]
-    if n == 5:
-        return [
-            [((names[0], names[1]), (names[2], names[3])), names[4]],
-            [((names[1], names[3]), (names[2], names[4])), names[0]],
-            [((names[0], names[4]), (names[1], names[2])), names[3]],
-            [((names[0], names[2]), (names[3], names[4])), names[1]],
-            [((names[0], names[3]), (names[1], names[4])), names[2]],
-        ]
-    if n == 6:
-        rounds = []
-        order = names[:]
-        for r in range(6):
-            sit1 = order[r % 6]
-            sit2 = order[(r + 3) % 6]
-            playing = [p for p in order if p not in (sit1, sit2)]
-            match = ((playing[0], playing[1]), (playing[2], playing[3]))
-            rounds.append([match, sit1, sit2])
-        return rounds
-    return []
-
-def smart_distribute(n_players, preferred_pools, preferred_size, min_size=3):
-    max_possible = preferred_pools * preferred_size
-    n = min(n_players, max_possible)
-    for num_pools in range(preferred_pools, 0, -1):
-        if n < num_pools * min_size:
-            continue
-        base = n // num_pools
-        rem = n % num_pools
-        sizes = [base + (1 if i < rem else 0) for i in range(num_pools)]
-        if all(s >= min_size for s in sizes):
-            return sizes
-    return [n] if n >= min_size else []
-
-def assign_medals(sorted_list, key_func):
-    if not sorted_list:
-        return []
-    medals = ["🥇", "🥈", "🥉"]
-    result = []
-    current_medal_idx = 0
-    prev_key = None
-    for item in sorted_list:
-        key = key_func(item)
-        if prev_key is not None and key != prev_key:
-            current_medal_idx += 1
-        if current_medal_idx >= 3:
-            break
-        result.append((medals[current_medal_idx], item))
-        prev_key = key
-    return result
-
-def build_interleaved_queue(schedules, pool_names):
-    queue = []
-    max_rounds = max((len(schedules.get(p, [])) for p in pool_names), default=0)
-    for r in range(max_rounds):
-        for pname in pool_names:
-            sched = schedules.get(pname, [])
-            if r < len(sched):
-                rnd = sched[r]
-                match_idx = 0
-                for item in rnd:
-                    if is_match(item):
-                        key = f"{pname}_r{r}_m{match_idx}"
-                        queue.append({
-                            "pool": pname,
-                            "round": r + 1,
-                            "match": item,
-                            "key": key
-                        })
-                        match_idx += 1
-    return queue
-
-def build_court_queues(schedules, pool_names, court_names):
-    court_queues = {}
-    for i, pname in enumerate(pool_names):
-        if i >= len(court_names):
-            break
-        court = court_names[i]
-        queue = []
-        sched = schedules.get(pname, [])
-        for r_idx, rnd in enumerate(sched):
-            match_idx = 0
-            for item in rnd:
-                if is_match(item):
-                    key = f"{pname}_r{r_idx}_m{match_idx}"
-                    queue.append({
-                        "pool": pname,
-                        "round": r_idx + 1,
-                        "match": item,
-                        "key": key
-                    })
-                    match_idx += 1
-        court_queues[court] = queue
-    return court_queues
-
 # ---------- Initialize ----------
 if "admin_unlocked" not in st.session_state:
     st.session_state.admin_unlocked = False
