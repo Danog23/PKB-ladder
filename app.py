@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from collections import defaultdict
-import copy
 import random
 from io import BytesIO
 from supabase import create_client, Client
@@ -48,7 +47,8 @@ def load_last_season_ladder():
     try:
         result = supabase.table("last_season_ladder").select("*").order("current_rank").execute()
         return result.data if result.data else []
-    except:
+    except Exception as e:
+        st.warning(f"Could not load Last Season Ladder: {e}")
         return []
 
 def parse_notes(notes):
@@ -82,7 +82,7 @@ def save_overall_ladder(players_stats):
 def archive_and_clear_ladder():
     try:
         current = load_overall_ladder()
-        # Archive
+        # Archive to last_season_ladder
         supabase.table("last_season_ladder").delete().neq("id", 0).execute()
         if current:
             rows = []
@@ -450,9 +450,12 @@ if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
         if ladder:
             champion = ladder[0]["player_name"]
             add_to_hall_of_fame(champion, season_str)
-            archive_and_clear_ladder()
-            st.session_state.season_start = str(date.today())
-            st.success(f"✅ Season ended!\n\n**{champion}** added to Hall of Fame.\nOverall Ladder archived and cleared.")
+            success = archive_and_clear_ladder()
+            if success:
+                st.session_state.season_start = str(date.today())
+                st.success(f"✅ Season ended!\n\n**{champion}** added to Hall of Fame.\nOverall Ladder has been archived and cleared.")
+            else:
+                st.error("Failed to archive ladder.")
         else:
             archive_and_clear_ladder()
             st.session_state.season_start = str(date.today())
@@ -525,7 +528,7 @@ if st.session_state.get("show_last_season"):
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     else:
-        st.info("No last season data.")
+        st.info("No last season data found.")
     if st.button("Close Last Season"):
         st.session_state.show_last_season = False
         st.rerun()
@@ -623,7 +626,6 @@ Skyler, 3.9"""
         if len(players) < 3:
             st.error("Need at least 3 players")
         else:
-            # Save for next time
             st.session_state.last_players_text = player_text.strip()
 
             overall = load_overall_ladder()
@@ -1067,7 +1069,6 @@ if st.session_state.get("created"):
                             st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
                     st.session_state.final_done = True
                     update_overall_ladder_from_session(st.session_state.cumulative)
-                    # Save players for next session pre-fill
                     lines = [f"{p['name']}, {p['dupr']}" for p in st.session_state.players]
                     st.session_state.last_players_text = "\n".join(lines)
                     save_state()
@@ -1115,13 +1116,11 @@ if st.session_state.get("created"):
         try:
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                # Day results
                 pd.DataFrame({
                     "Player": list(cum.keys()),
                     "+/−": [v["diff"] for v in cum.values()],
                     "Wins": [v["wins"] for v in cum.values()]
                 }).to_excel(writer, sheet_name="Day Results", index=False)
-                # Climbers
                 if climbers:
                     pd.DataFrame(climbers).to_excel(writer, sheet_name="Biggest Climbers", index=False)
             st.download_button("📥 Download Excel Report", output.getvalue(), "pickleball_session_report.xlsx")
