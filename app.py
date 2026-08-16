@@ -49,16 +49,36 @@ def clean_season(s):
 
 def load_overall_ladder():
     try:
-        result = supabase.table("master_ladder").select("*").order("current_rank").execute()
-        return result.data if result.data else []
+        result = supabase.table("master_ladder").select("*").execute()
+        data = result.data if result.data else []
+        # Sort: diff desc, wins desc, avg desc, dupr desc
+        def sort_key(row):
+            diff, wins, sessions = parse_notes(row.get("notes", ""))
+            avg = diff / sessions if sessions > 0 else 0
+            dupr = row.get("dupr") or 0
+            return (-diff, -wins, -avg, -dupr)
+        data.sort(key=sort_key)
+        # re-number ranks
+        for i, row in enumerate(data):
+            row["current_rank"] = i + 1
+        return data
     except Exception as e:
         st.warning(f"Could not load Overall Ladder: {e}")
         return []
 
 def load_last_season_ladder():
     try:
-        result = supabase.table("last_season_ladder").select("*").order("current_rank").execute()
-        return result.data if result.data else []
+        result = supabase.table("last_season_ladder").select("*").execute()
+        data = result.data if result.data else []
+        def sort_key(row):
+            diff, wins, sessions = parse_notes(row.get("notes", ""))
+            avg = diff / sessions if sessions > 0 else 0
+            dupr = row.get("dupr") or 0
+            return (-diff, -wins, -avg, -dupr)
+        data.sort(key=sort_key)
+        for i, row in enumerate(data):
+            row["current_rank"] = i + 1
+        return data
     except Exception as e:
         st.warning(f"Could not load Last Season Ladder: {e}")
         return []
@@ -115,7 +135,7 @@ def archive_and_clear_ladder():
 def get_top10_ladder():
     return load_overall_ladder()[:10]
 
-def update_overall_ladder_from_session(cumulative):
+def update_overall_ladder_from_session(cumulative, player_duprs=None):
     try:
         current = load_overall_ladder()
         current_dict = {}
@@ -123,7 +143,7 @@ def update_overall_ladder_from_session(cumulative):
             diff, wins, sessions = parse_notes(row.get("notes", ""))
             current_dict[row["player_name"]] = {
                 "name": row["player_name"],
-                "dupr": row.get("dupr", 0),
+                "dupr": row.get("dupr") or 0,
                 "diff": diff,
                 "wins": wins,
                 "sessions": sessions
@@ -134,14 +154,25 @@ def update_overall_ladder_from_session(cumulative):
                 current_dict[name]["wins"] += stats.get("wins", 0)
                 current_dict[name]["sessions"] += 1
             else:
+                dupr = 0
+                if player_duprs and name in player_duprs:
+                    dupr = player_duprs[name]
                 current_dict[name] = {
                     "name": name,
-                    "dupr": 0,
+                    "dupr": dupr,
                     "diff": stats.get("diff", 0),
                     "wins": stats.get("wins", 0),
                     "sessions": 1
                 }
-        sorted_list = sorted(current_dict.values(), key=lambda x: (x["diff"], x["wins"]), reverse=True)
+        sorted_list = sorted(
+            current_dict.values(),
+            key=lambda x: (
+                -x["diff"],
+                -x["wins"],
+                -(x["diff"] / x["sessions"] if x["sessions"] > 0 else 0),
+                -x.get("dupr", 0)
+            )
+        )
         save_overall_ladder(sorted_list)
         return sorted_list
     except Exception as e:
@@ -162,14 +193,22 @@ def load_hof():
                         diff = int(part.split(":")[1])
             except:
                 pass
-            return (-champs, -diff)
+            # We store dupr in notes as well if available: diff:X|dupr:Y
+            dupr = 0
+            try:
+                for part in notes.split("|"):
+                    if part.startswith("dupr:"):
+                        dupr = float(part.split(":")[1])
+            except:
+                pass
+            return (-champs, -diff, -dupr)
         data.sort(key=sort_key)
         return data
     except Exception as e:
         st.warning(f"Could not load Hall of Fame: {e}")
         return []
 
-def add_to_hall_of_fame(player_name, season_str, total_diff=0):
+def add_to_hall_of_fame(player_name, season_str, total_diff=0, dupr=0):
     season_str = clean_season(season_str)
     try:
         existing = supabase.table("hall_of_fame").select("*").eq("player_name", player_name).execute()
@@ -192,14 +231,14 @@ def add_to_hall_of_fame(player_name, season_str, total_diff=0):
             supabase.table("hall_of_fame").update({
                 "championships": current + 1,
                 "last_season": new_seasons,
-                "notes": f"diff:{final_diff}"
+                "notes": f"diff:{final_diff}|dupr:{dupr}"
             }).eq("player_name", player_name).execute()
         else:
             supabase.table("hall_of_fame").insert({
                 "player_name": player_name,
                 "championships": 1,
                 "last_season": season_str,
-                "notes": f"diff:{total_diff}"
+                "notes": f"diff:{total_diff}|dupr:{dupr}"
             }).execute()
         return True
     except Exception as e:
@@ -385,7 +424,7 @@ if "admin_unlocked" not in st.session_state:
 if "admin_password" not in st.session_state:
     st.session_state.admin_password = "2302"
 if "edit_password" not in st.session_state:
-    st.session_state.edit_password = "1234"
+    st.session_state.edit_password = "2302"          # <-- default now 2302
 if "created" not in st.session_state:
     load_state()
 if "full_score_history" not in st.session_state:
@@ -480,92 +519,99 @@ with c7:
         if st.button("End Season"):
             st.session_state.show_end_season = True
 
-# ---------- Dialogs with Confirm buttons ----------
+# ---------- Dialogs ----------
 if st.session_state.get("show_admin_login") and not st.session_state.admin_unlocked:
     st.subheader("Admin Login")
-    pwd = st.text_input("Enter Admin Password", type="password", key="admin_login")
-    if st.button("Confirm Admin Login"):
-        if pwd == st.session_state.admin_password:
-            st.session_state.admin_unlocked = True
-            st.session_state.show_admin_login = False
-            st.rerun()
-        else:
-            st.error("Wrong password")
+    with st.form("admin_login_form"):
+        pwd = st.text_input("Enter Admin Password", type="password")
+        submitted = st.form_submit_button("Confirm Admin Login")
+        if submitted:
+            if pwd == st.session_state.admin_password:
+                st.session_state.admin_unlocked = True
+                st.session_state.show_admin_login = False
+                st.rerun()
+            else:
+                st.error("Wrong password")
 
 if st.session_state.get("show_change_admin_pwd") and st.session_state.admin_unlocked:
     st.subheader("Change Admin Password")
-    old = st.text_input("Current Admin Password", type="password", key="old_admin")
-    new = st.text_input("New Admin Password", type="password", key="new_admin")
-    if st.button("Update Admin Password"):
-        if old == st.session_state.admin_password and new and len(new) >= 4:
-            st.session_state.admin_password = new
-            st.session_state.show_change_admin_pwd = False
-            save_state()
-            st.success("Admin password updated")
-            st.rerun()
-        else:
-            st.error("Incorrect or too short")
+    with st.form("change_admin_form"):
+        old = st.text_input("Current Admin Password", type="password")
+        new = st.text_input("New Admin Password", type="password")
+        if st.form_submit_button("Update Admin Password"):
+            if old == st.session_state.admin_password and new and len(new) >= 4:
+                st.session_state.admin_password = new
+                st.session_state.show_change_admin_pwd = False
+                save_state()
+                st.success("Admin password updated")
+                st.rerun()
+            else:
+                st.error("Incorrect or too short")
 
 if st.session_state.get("show_change_edit_pwd") and st.session_state.admin_unlocked:
     st.subheader("Change Edit Password")
-    old = st.text_input("Current Admin Password (required)", type="password", key="old_for_edit")
-    new = st.text_input("New Edit Password", type="password", key="new_edit")
-    if st.button("Update Edit Password"):
-        if old == st.session_state.admin_password and new and len(new) >= 3:
-            st.session_state.edit_password = new
-            st.session_state.show_change_edit_pwd = False
-            save_state()
-            st.success("Edit password updated")
-            st.rerun()
-        else:
-            st.error("Incorrect admin password or too short")
+    with st.form("change_edit_form"):
+        old = st.text_input("Current Admin Password (required)", type="password")
+        new = st.text_input("New Edit Password", type="password")
+        if st.form_submit_button("Update Edit Password"):
+            if old == st.session_state.admin_password and new and len(new) >= 3:
+                st.session_state.edit_password = new
+                st.session_state.show_change_edit_pwd = False
+                save_state()
+                st.success("Edit password updated")
+                st.rerun()
+            else:
+                st.error("Incorrect admin password or too short")
 
 if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
     st.warning("This will archive the current Overall Ladder as Last Season, clear it, and add the #1 player to the Hall of Fame.")
-    pwd = st.text_input("Admin Password to End Season", type="password", key="end_season_pwd")
-    if st.button("Confirm End Season"):
-        if pwd == st.session_state.admin_password:
-            ladder = get_top10_ladder()
-            season_str = month_range_str(st.session_state.get("season_start"))
-            if ladder:
-                champion = ladder[0]["player_name"]
-                total_diff = 0
-                try:
-                    for part in (ladder[0].get("notes") or "").split("|"):
-                        if part.startswith("diff:"):
-                            total_diff = int(part.split(":")[1])
-                except:
-                    pass
-                add_to_hall_of_fame(champion, season_str, total_diff)
-                success = archive_and_clear_ladder()
-                if success:
-                    st.session_state.season_start = str(date.today())
-                    st.success(f"✅ Season ended!\n\n**{champion}** added to Hall of Fame.")
+    with st.form("end_season_form"):
+        pwd = st.text_input("Admin Password to End Season", type="password")
+        if st.form_submit_button("Confirm End Season"):
+            if pwd == st.session_state.admin_password:
+                ladder = get_top10_ladder()
+                season_str = month_range_str(st.session_state.get("season_start"))
+                if ladder:
+                    champion = ladder[0]["player_name"]
+                    total_diff = 0
+                    dupr = ladder[0].get("dupr") or 0
+                    try:
+                        for part in (ladder[0].get("notes") or "").split("|"):
+                            if part.startswith("diff:"):
+                                total_diff = int(part.split(":")[1])
+                    except:
+                        pass
+                    add_to_hall_of_fame(champion, season_str, total_diff, dupr)
+                    success = archive_and_clear_ladder()
+                    if success:
+                        st.session_state.season_start = str(date.today())
+                        st.success(f"✅ Season ended! **{champion}** added to Hall of Fame.")
+                    else:
+                        st.error("Failed to archive ladder.")
                 else:
-                    st.error("Failed to archive ladder.")
+                    archive_and_clear_ladder()
+                    st.session_state.season_start = str(date.today())
+                    st.info("Overall Ladder was empty. New season started.")
+                st.session_state.show_end_season = False
+                st.rerun()
             else:
-                archive_and_clear_ladder()
-                st.session_state.season_start = str(date.today())
-                st.info("Overall Ladder was empty. New season started.")
-            st.session_state.show_end_season = False
-            st.rerun()
-        else:
-            st.error("Wrong password")
+                st.error("Wrong password")
 
 if st.session_state.get("show_reset_hof") and st.session_state.admin_unlocked:
     st.warning("This will permanently delete the Hall of Fame.")
-    pwd = st.text_input("Admin Password to Reset Hall of Fame", type="password", key="reset_hof_pwd")
-    if st.button("Confirm Reset Hall of Fame"):
-        if pwd == st.session_state.admin_password:
-            try:
-                supabase.table("hall_of_fame").delete().neq("id", 0).execute()
-                st.session_state.show_reset_hof = False
-                st.success("Hall of Fame has been reset.")
-                st.rerun()
-            except Exception as e:
-                st.error(str(e))
-        else:
-            st.error("Wrong password")
+    with st.form("reset_hof_form"):
+        pwd = st.text_input("Admin Password to Reset Hall of Fame", type="password")
+        if st.form_submit_button("Confirm Reset Hall of Fame"):
+            if pwd == st.session_state.admin_password:
+                try:
+                    supabase.table("hall_of_fame").delete().neq("id", 0).execute()
+                    st.session_state.show_reset_hof = False
+                    st.success("Hall of Fame has been reset.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+            else:
+                st.error("Wrong password")
 
 st.markdown("---")
 
@@ -579,12 +625,15 @@ if st.session_state.show_ladder_page:
         for i, p in enumerate(ladder):
             medal = "🥇 " if i == 0 else "🥈 " if i == 1 else "🥉 " if i == 2 else ""
             diff, wins, sessions = parse_notes(p.get("notes", ""))
+            avg = round(diff / sessions, 2) if sessions > 0 else 0
             rows.append({
                 "Rank": f"{medal}{p['current_rank']}",
                 "Player": p["player_name"],
+                "DUPR": p.get("dupr") or 0,
                 "Total +/−": diff,
                 "Wins": wins,
-                "Sessions": sessions
+                "Sessions": sessions,
+                "Avg +/−": avg
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     else:
@@ -607,12 +656,15 @@ if st.session_state.get("show_last_season"):
         for i, p in enumerate(last):
             medal = "🥇 " if i == 0 else "🥈 " if i == 1 else "🥉 " if i == 2 else ""
             diff, wins, sessions = parse_notes(p.get("notes", ""))
+            avg = round(diff / sessions, 2) if sessions > 0 else 0
             rows.append({
                 "Rank": f"{medal}{p['current_rank']}",
                 "Player": p["player_name"],
+                "DUPR": p.get("dupr") or 0,
                 "Total +/−": diff,
                 "Wins": wins,
-                "Sessions": sessions
+                "Sessions": sessions,
+                "Avg +/−": avg
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     else:
@@ -632,15 +684,19 @@ if st.session_state.show_hof_page:
             medal = "🥇 " if i == 0 else "🥈 " if i == 1 else "🥉 " if i == 2 else ""
             seasons = clean_season(p.get("last_season", "-"))
             total_diff = 0
+            dupr = 0
             try:
                 for part in (p.get("notes") or "").split("|"):
                     if part.startswith("diff:"):
                         total_diff = int(part.split(":")[1])
+                    if part.startswith("dupr:"):
+                        dupr = float(part.split(":")[1])
             except:
                 pass
             rows.append({
                 "Rank": f"{medal}{i+1}",
                 "Player": p["player_name"],
+                "DUPR": dupr,
                 "Championships": p.get("championships", 0),
                 "Total +/−": total_diff,
                 "Season": seasons
@@ -849,14 +905,17 @@ if st.session_state.get("created"):
 
     st.caption(f"Courts: {st.session_state.num_courts} | Pools: {num_pools} | Play to: {play_to} | Season: {month_range_str(st.session_state.get('season_start'))}")
 
-    # Score History with direct edit + Confirm button
+    # Score History
     if st.button("📜 Show / Hide Score History"):
         st.session_state.show_score_history = not st.session_state.show_score_history
 
     if st.session_state.show_score_history:
         st.subheader("Full Score History")
         if st.session_state.full_score_history:
+            current_cycle = st.session_state.cycle
             for e_idx, entry in enumerate(st.session_state.full_score_history):
+                # Only allow editing the current unfinished round
+                can_edit = is_admin and (not st.session_state.get("standings")) and ("Round " + str(current_cycle) in entry.get("title", ""))
                 st.markdown(f"**{entry['title']}**")
                 keys = entry.get("keys", [None] * len(entry.get("lines", [])))
                 for idx, line in enumerate(entry.get("lines", [])):
@@ -864,38 +923,37 @@ if st.session_state.get("created"):
                     cols = st.columns([5, 1, 1, 1.5])
                     with cols[0]:
                         st.write(line)
-                    if is_admin and stored_key:
+                    if can_edit and stored_key:
                         with cols[1]:
                             s1 = st.number_input("S1", 0, 30, st.session_state.scores.get(stored_key, (0,0))[0], key=f"hs1_{e_idx}_{idx}")
                         with cols[2]:
                             s2 = st.number_input("S2", 0, 30, st.session_state.scores.get(stored_key, (0,0))[1], key=f"hs2_{e_idx}_{idx}")
                         with cols[3]:
-                            if st.button("Save Score", key=f"hsave_{e_idx}_{idx}"):
-                                st.session_state[f"pending_edit_{e_idx}_{idx}"] = (s1, s2, stored_key, e_idx, idx)
-                    elif is_admin:
-                        st.caption("(older entry)")
+                            if st.button("Save", key=f"hsave_{e_idx}_{idx}"):
+                                st.session_state[f"pending_edit_{e_idx}_{idx}"] = (s1, s2, stored_key, e_idx, idx, line)
+                    elif is_admin and not can_edit:
+                        st.caption("🔒 Locked (next round started)")
 
-                    # Password confirm for this edit
                     if st.session_state.get(f"pending_edit_{e_idx}_{idx}"):
-                        s1, s2, stored_key, e_idx2, idx2 = st.session_state[f"pending_edit_{e_idx}_{idx}"]
-                        pwd = st.text_input("Edit Password", type="password", key=f"hpwd_{e_idx}_{idx}")
-                        if st.button("Confirm Score Change", key=f"hconfirm_{e_idx}_{idx}"):
-                            if pwd == st.session_state.edit_password:
-                                st.session_state.scores[stored_key] = (s1, s2)
-                                parts = line.split("→")
-                                new_line = parts[0] + f"→ {s1}-{s2}"
-                                st.session_state.full_score_history[e_idx]["lines"][idx] = new_line
-                                # Clear rankings so they must be recalculated
-                                if st.session_state.get("standings"):
-                                    st.session_state.standings = None
-                                    st.session_state.relevant_ties = None
-                                    st.session_state.skinny_results = {}
-                                del st.session_state[f"pending_edit_{e_idx}_{idx}"]
-                                save_state()
-                                st.success("Score updated. Rankings cleared – please recalculate.")
-                                st.rerun()
-                            else:
-                                st.error("Wrong Edit Password")
+                        s1, s2, stored_key, e_idx2, idx2, old_line = st.session_state[f"pending_edit_{e_idx}_{idx}"]
+                        with st.form(f"form_edit_{e_idx}_{idx}"):
+                            pwd = st.text_input("Edit Password", type="password")
+                            if st.form_submit_button("Confirm Score Change"):
+                                if pwd == st.session_state.edit_password:
+                                    st.session_state.scores[stored_key] = (s1, s2)
+                                    parts = old_line.split("→")
+                                    new_line = parts[0] + f"→ {s1}-{s2}"
+                                    st.session_state.full_score_history[e_idx]["lines"][idx] = new_line
+                                    if st.session_state.get("standings"):
+                                        st.session_state.standings = None
+                                        st.session_state.relevant_ties = None
+                                        st.session_state.skinny_results = {}
+                                    del st.session_state[f"pending_edit_{e_idx}_{idx}"]
+                                    save_state()
+                                    st.success("Score updated.")
+                                    st.rerun()
+                                else:
+                                    st.error("Wrong Edit Password")
         else:
             st.caption("No scores recorded yet.")
 
@@ -958,15 +1016,16 @@ if st.session_state.get("created"):
                         if st.button("🔓 Unlock", key=f"unlock_{key}"):
                             st.session_state[f"pending_unlock_{key}"] = True
                         if st.session_state.get(f"pending_unlock_{key}"):
-                            pwd = st.text_input("Edit Password", type="password", key=f"pwd_unlock_{key}")
-                            if st.button("Confirm Unlock", key=f"confirm_unlock_{key}"):
-                                if pwd == st.session_state.edit_password:
-                                    st.session_state.locked_matches[key] = False
-                                    del st.session_state[f"pending_unlock_{key}"]
-                                    save_state()
-                                    st.rerun()
-                                else:
-                                    st.error("Wrong Edit Password")
+                            with st.form(f"form_unlock_{key}"):
+                                pwd = st.text_input("Edit Password", type="password")
+                                if st.form_submit_button("Confirm Unlock"):
+                                    if pwd == st.session_state.edit_password:
+                                        st.session_state.locked_matches[key] = False
+                                        del st.session_state[f"pending_unlock_{key}"]
+                                        save_state()
+                                        st.rerun()
+                                    else:
+                                        st.error("Wrong Edit Password")
                     else:
                         with col2:
                             s1 = st.number_input("Score 1", 0, 30, int(current[0]), key=f"s1_{key}")
@@ -1092,20 +1151,21 @@ if st.session_state.get("created"):
             if st.button("✏️ Edit This Round"):
                 st.session_state["pending_edit_round"] = True
             if st.session_state.get("pending_edit_round"):
-                pwd = st.text_input("Edit Password", type="password", key="edit_round_pwd")
-                if st.button("Confirm Re-open Round"):
-                    if pwd == st.session_state.edit_password:
-                        st.session_state.standings = None
-                        st.session_state.relevant_ties = None
-                        st.session_state.skinny_results = {}
-                        for k in list(st.session_state.locked_matches.keys()):
-                            st.session_state.locked_matches[k] = False
-                        del st.session_state["pending_edit_round"]
-                        save_state()
-                        st.success("Round re-opened.")
-                        st.rerun()
-                    else:
-                        st.error("Wrong Edit Password")
+                with st.form("form_edit_round"):
+                    pwd = st.text_input("Edit Password", type="password")
+                    if st.form_submit_button("Confirm Re-open Round"):
+                        if pwd == st.session_state.edit_password:
+                            st.session_state.standings = None
+                            st.session_state.relevant_ties = None
+                            st.session_state.skinny_results = {}
+                            for k in list(st.session_state.locked_matches.keys()):
+                                st.session_state.locked_matches[k] = False
+                            del st.session_state["pending_edit_round"]
+                            save_state()
+                            st.success("Round re-opened. You can now edit scores.")
+                            st.rerun()
+                        else:
+                            st.error("Wrong Edit Password")
 
         cols = st.columns(min(len(pool_names), 4))
         for i, pname in enumerate(pool_names):
@@ -1165,6 +1225,7 @@ if st.session_state.get("created"):
                             "data": st.session_state.standings
                         })
 
+                        # Balanced movement – preserve sizes
                         final_rankings = st.session_state.standings
                         new_pools = {name: [] for name in pool_names}
                         display_data = {name: [] for name in pool_names}
@@ -1174,6 +1235,7 @@ if st.session_state.get("created"):
                         for p_idx in range(len(pool_names) - 1):
                             lower = pool_names[p_idx + 1]
                             upper = pool_names[p_idx]
+                            # Use the movers setting of the lower pool
                             move_n = pool_movers.get(lower, 1)
                             move_n = min(move_n, len(final_rankings[lower]) // 2, len(final_rankings[upper]) // 2)
                             if move_n < 1:
@@ -1270,7 +1332,8 @@ if st.session_state.get("created"):
                             st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
                             st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
                     st.session_state.final_done = True
-                    update_overall_ladder_from_session(st.session_state.cumulative)
+                    player_duprs = {p["name"]: p["dupr"] for p in st.session_state.players}
+                    update_overall_ladder_from_session(st.session_state.cumulative, player_duprs)
                     lines = [f"{p['name']}, {p['dupr']}" for p in st.session_state.players]
                     st.session_state.last_players_text = "\n".join(lines)
                     save_state()
