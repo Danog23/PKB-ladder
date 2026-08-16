@@ -211,18 +211,26 @@ def add_to_hall_of_fame(player_name, season_str, total_diff=0, dupr=0):
             if season_str not in seasons:
                 seasons.append(season_str)
             new_seasons = ", ".join(seasons)
+
+            # Keep the higher total_diff and the real dupr
             old_diff = 0
+            old_dupr = 0.0
             try:
                 for part in (row.get("notes") or "").split("|"):
                     if part.startswith("diff:"):
                         old_diff = int(part.split(":")[1])
+                    if part.startswith("dupr:"):
+                        old_dupr = float(part.split(":")[1])
             except:
                 pass
+
             final_diff = max(old_diff, total_diff)
+            final_dupr = dupr if dupr > 0 else old_dupr
+
             supabase.table("hall_of_fame").update({
                 "championships": current + 1,
                 "last_season": new_seasons,
-                "notes": f"diff:{final_diff}|dupr:{dupr}"
+                "notes": f"diff:{final_diff}|dupr:{final_dupr}"
             }).eq("player_name", player_name).execute()
         else:
             supabase.table("hall_of_fame").insert({
@@ -564,6 +572,7 @@ if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
                 if ladder:
                     champion = ladder[0]["player_name"]
                     total_diff = 0
+                    # Stronger DUPR retrieval
                     dupr = float(ladder[0].get("dupr") or 0)
                     try:
                         for part in (ladder[0].get("notes") or "").split("|"):
@@ -571,11 +580,19 @@ if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
                                 total_diff = int(part.split(":")[1])
                     except:
                         pass
+
+                    # Extra safety: if DUPR is still 0, try to find it from the current session players
+                    if dupr == 0 and st.session_state.get("players"):
+                        for p in st.session_state.players:
+                            if p["name"] == champion:
+                                dupr = float(p.get("dupr") or 0)
+                                break
+
                     add_to_hall_of_fame(champion, season_str, total_diff, dupr)
                     success = archive_and_clear_ladder()
                     if success:
                         st.session_state.season_start = str(date.today())
-                        st.success(f"✅ Season ended! **{champion}** added to Hall of Fame.")
+                        st.success(f"✅ Season ended! **{champion}** (DUPR {dupr}) added to Hall of Fame.")
                     else:
                         st.error("Failed to archive ladder.")
                 else:
@@ -641,7 +658,6 @@ Players keep their position from week to week. New players are inserted by their
     else:
         st.info("Overall Ladder is empty.")
 
-    # Admin full edit for Overall Ladder
     if st.session_state.admin_unlocked and ladder:
         st.markdown("---")
         st.subheader("Admin: Edit Overall Ladder Player")
