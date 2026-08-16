@@ -328,6 +328,38 @@ def build_court_queues(schedules, pool_names, court_names, pools):
 def centered_title(text):
     st.markdown(f"<h3 style='text-align: center;'>{text}</h3>", unsafe_allow_html=True)
 
+def get_upcoming_matches():
+    """Build a readable list of upcoming matches for the schedule display"""
+    upcoming = []
+    # Currently playing
+    for court, status in st.session_state.get("court_status", {}).items():
+        if status:
+            t1, t2 = status["match"]
+            upcoming.append({
+                "Status": f"▶ {court}",
+                "Pool": status["pool"],
+                "Match": f"{t1[0]} & {t1[1]} vs {t2[0]} & {t2[1]}"
+            })
+    # Queue
+    if st.session_state.get("use_shared_courts"):
+        for item in st.session_state.get("match_queue", [])[:12]:
+            t1, t2 = item["match"]
+            upcoming.append({
+                "Status": "Up next",
+                "Pool": item["pool"],
+                "Match": f"{t1[0]} & {t1[1]} vs {t2[0]} & {t2[1]}"
+            })
+    else:
+        for court, q in st.session_state.get("court_queues", {}).items():
+            for item in q[:4]:
+                t1, t2 = item["match"]
+                upcoming.append({
+                    "Status": f"Up next ({court})",
+                    "Pool": item["pool"],
+                    "Match": f"{t1[0]} & {t1[1]} vs {t2[0]} & {t2[1]}"
+                })
+    return upcoming
+
 # ---------- Initialize ----------
 if "admin_unlocked" not in st.session_state:
     st.session_state.admin_unlocked = False
@@ -815,6 +847,14 @@ if st.session_state.get("created"):
                     st.markdown(f"<h4 style='text-align:center'>{pname}</h4>", unsafe_allow_html=True)
                     st.dataframe(pd.DataFrame([{"Player": r["Player"], "Note": r.get("Note", "")} for r in rows]), hide_index=True, use_container_width=True)
 
+    # ========== UPCOMING SCHEDULE ==========
+    if not st.session_state.get("final_done"):
+        upcoming = get_upcoming_matches()
+        if upcoming:
+            st.markdown("---")
+            centered_title("Upcoming Match Schedule")
+            st.dataframe(pd.DataFrame(upcoming), hide_index=True, use_container_width=True)
+
     # COURT BOARD
     if not st.session_state.get("standings") and not st.session_state.get("final_done"):
         st.markdown("---")
@@ -828,7 +868,7 @@ if st.session_state.get("created"):
                 current = st.session_state.scores.get(key, (play_to, play_to - 1))
 
                 st.subheader(f"{court} | {status['pool']} Match {status['round']}")
-                col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+                col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
                 with col1:
                     st.write(f"**{t1[0]} & {t1[1]}** vs **{t2[0]} & {t2[1]}**")
 
@@ -865,6 +905,27 @@ if st.session_state.get("created"):
                                     q = st.session_state.court_queues.get(court, [])
                                     if q:
                                         st.session_state.court_status[court] = q.pop(0)
+                                        st.session_state.court_queues[court] = q
+                                    else:
+                                        st.session_state.court_status[court] = None
+                                save_state()
+                                st.rerun()
+                        with col5:
+                            if st.button("Skip →", key=f"skip_{key}"):
+                                # Move this match to the end of the queue and bring the next one
+                                if use_shared:
+                                    if st.session_state.match_queue:
+                                        skipped = status
+                                        st.session_state.court_status[court] = st.session_state.match_queue.pop(0)
+                                        st.session_state.match_queue.append(skipped)
+                                    else:
+                                        st.session_state.court_status[court] = None
+                                else:
+                                    q = st.session_state.court_queues.get(court, [])
+                                    if q:
+                                        skipped = status
+                                        st.session_state.court_status[court] = q.pop(0)
+                                        q.append(skipped)
                                         st.session_state.court_queues[court] = q
                                     else:
                                         st.session_state.court_status[court] = None
@@ -907,21 +968,19 @@ if st.session_state.get("created"):
                     ranking.sort(key=lambda x: (x["diff"], x["wins"]), reverse=True)
                     standings[pname] = ranking
 
-                    # Skinny singles detection - improved
                     move_n = pool_movers.get(pname, 1)
                     n = len(ranking)
                     move_n = min(move_n, n // 2) if n >= 2 else 0
                     ties = []
 
-                    if p_idx > 0 and move_n > 0:  # can move up
-                        # Find all players tied with the cut-off player for moving up
+                    if p_idx > 0 and move_n > 0:
                         cut_diff = ranking[move_n - 1]["diff"]
                         cut_wins = ranking[move_n - 1]["wins"]
                         grp = [r["name"] for r in ranking if r["diff"] == cut_diff and r["wins"] == cut_wins]
                         if len(grp) > move_n:
                             ties.append({"zone": "top (move up)", "players": grp, "needed": move_n, "score": cut_diff})
 
-                    if p_idx < num_pools - 1 and move_n > 0:  # can move down
+                    if p_idx < num_pools - 1 and move_n > 0:
                         cut_diff = ranking[-move_n]["diff"]
                         cut_wins = ranking[-move_n]["wins"]
                         grp = [r["name"] for r in ranking if r["diff"] == cut_diff and r["wins"] == cut_wins]
@@ -999,7 +1058,6 @@ if st.session_state.get("created"):
                             "data": st.session_state.standings
                         })
 
-                        # Balanced movement
                         final_rankings = st.session_state.standings
                         new_pools = {name: [] for name in pool_names}
                         display_data = {name: [] for name in pool_names}
@@ -1126,7 +1184,7 @@ if st.session_state.get("created"):
         if st.session_state.standings and pool_names:
             top_pool = st.session_state.standings.get(pool_names[0], [])
             for medal, r in assign_medals(top_pool, key_func=lambda x: (x["diff"], x["wins"])):
-                st.write(f"{medal} **{r['name']}** — +/− {r['diff']:+d}")
+                st.write(f"{medal} **{r['name']}** — +/− {r['diff']:+d} (Wins: {r['wins']})")
 
         st.subheader("Biggest Climbers")
         initial_ranks = st.session_state.get("initial_ranks", {})
@@ -1149,23 +1207,19 @@ if st.session_state.get("created"):
 
         st.success("Session complete! Overall Ladder has been updated.")
 
-        # ========== IMPROVED EXCEL EXPORT ==========
         st.markdown("---")
         try:
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                # Sheet 1: Day Results
                 pd.DataFrame({
                     "Player": list(cum.keys()),
                     "+/−": [v["diff"] for v in cum.values()],
                     "Wins": [v["wins"] for v in cum.values()]
                 }).to_excel(writer, sheet_name="Day Results", index=False)
 
-                # Sheet 2: Biggest Climbers
                 if climbers:
                     pd.DataFrame(climbers).to_excel(writer, sheet_name="Biggest Climbers", index=False)
 
-                # Sheet 3: All Match Scores
                 match_rows = []
                 for entry in st.session_state.get("full_score_history", []):
                     for line in entry.get("lines", []):
@@ -1173,7 +1227,6 @@ if st.session_state.get("created"):
                 if match_rows:
                     pd.DataFrame(match_rows).to_excel(writer, sheet_name="All Match Scores", index=False)
 
-                # Sheet 4: Rankings history
                 for entry in st.session_state.get("assignment_history", []):
                     if entry["type"] == "rankings":
                         for pname, ranking in entry["data"].items():
