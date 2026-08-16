@@ -150,13 +150,27 @@ def update_overall_ladder_from_session(cumulative):
 
 def load_hof():
     try:
-        result = supabase.table("hall_of_fame").select("*").order("championships", desc=True).execute()
-        return result.data if result.data else []
+        result = supabase.table("hall_of_fame").select("*").execute()
+        data = result.data if result.data else []
+        # Sort: championships desc, then total_diff desc
+        def sort_key(row):
+            champs = row.get("championships", 0)
+            notes = row.get("notes", "")
+            diff = 0
+            try:
+                for part in notes.split("|"):
+                    if part.startswith("diff:"):
+                        diff = int(part.split(":")[1])
+            except:
+                pass
+            return (-champs, -diff)
+        data.sort(key=sort_key)
+        return data
     except Exception as e:
         st.warning(f"Could not load Hall of Fame: {e}")
         return []
 
-def add_to_hall_of_fame(player_name, season_str):
+def add_to_hall_of_fame(player_name, season_str, total_diff=0):
     season_str = clean_season(season_str)
     try:
         existing = supabase.table("hall_of_fame").select("*").eq("player_name", player_name).execute()
@@ -168,16 +182,26 @@ def add_to_hall_of_fame(player_name, season_str):
             if season_str not in seasons:
                 seasons.append(season_str)
             new_seasons = ", ".join(seasons)
+            # Keep the highest total_diff we have
+            old_diff = 0
+            try:
+                for part in (row.get("notes") or "").split("|"):
+                    if part.startswith("diff:"):
+                        old_diff = int(part.split(":")[1])
+            except:
+                pass
+            final_diff = max(old_diff, total_diff)
             supabase.table("hall_of_fame").update({
                 "championships": current + 1,
-                "last_season": new_seasons
+                "last_season": new_seasons,
+                "notes": f"diff:{final_diff}"
             }).eq("player_name", player_name).execute()
         else:
             supabase.table("hall_of_fame").insert({
                 "player_name": player_name,
                 "championships": 1,
                 "last_season": season_str,
-                "notes": "Season Champion"
+                "notes": f"diff:{total_diff}"
             }).execute()
         return True
     except Exception as e:
@@ -408,8 +432,6 @@ if "show_change_admin_pwd" not in st.session_state:
     st.session_state.show_change_admin_pwd = False
 if "show_change_edit_pwd" not in st.session_state:
     st.session_state.show_change_edit_pwd = False
-if "edit_unlocked" not in st.session_state:
-    st.session_state.edit_unlocked = False
 
 # ---------- Top Bar ----------
 c1, c2, c3, c4, c5, c6, c7 = st.columns([1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3])
@@ -422,7 +444,6 @@ with c1:
         st.success("Admin Active")
         if st.button("User Mode"):
             st.session_state.admin_unlocked = False
-            st.session_state.edit_unlocked = False
             st.rerun()
 
 with c2:
@@ -507,7 +528,15 @@ if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
         season_str = month_range_str(st.session_state.get("season_start"))
         if ladder:
             champion = ladder[0]["player_name"]
-            add_to_hall_of_fame(champion, season_str)
+            # Get total +/- from notes
+            total_diff = 0
+            try:
+                for part in (ladder[0].get("notes") or "").split("|"):
+                    if part.startswith("diff:"):
+                        total_diff = int(part.split(":")[1])
+            except:
+                pass
+            add_to_hall_of_fame(champion, season_str, total_diff)
             success = archive_and_clear_ladder()
             if success:
                 st.session_state.season_start = str(date.today())
@@ -601,10 +630,18 @@ if st.session_state.show_hof_page:
         for i, p in enumerate(hof):
             medal = "🥇 " if i == 0 else "🥈 " if i == 1 else "🥉 " if i == 2 else ""
             seasons = clean_season(p.get("last_season", "-"))
+            total_diff = 0
+            try:
+                for part in (p.get("notes") or "").split("|"):
+                    if part.startswith("diff:"):
+                        total_diff = int(part.split(":")[1])
+            except:
+                pass
             rows.append({
                 "Rank": f"{medal}{i+1}",
                 "Player": p["player_name"],
                 "Championships": p.get("championships", 0),
+                "Total +/−": total_diff,
                 "Season": seasons
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
@@ -813,30 +850,54 @@ if st.session_state.get("created"):
 
     st.caption(f"Courts: {st.session_state.num_courts} | Pools: {num_pools} | Play to: {play_to} | Season: {month_range_str(st.session_state.get('season_start'))}")
 
-    # Score History + Edit
+    # Score History with direct edit
     if st.button("📜 Show / Hide Score History"):
         st.session_state.show_score_history = not st.session_state.show_score_history
 
     if st.session_state.show_score_history:
         st.subheader("Full Score History")
         if st.session_state.full_score_history:
-            for entry in st.session_state.full_score_history:
+            for e_idx, entry in enumerate(st.session_state.full_score_history):
                 st.markdown(f"**{entry['title']}**")
                 for idx, line in enumerate(entry.get("lines", [])):
-                    cols = st.columns([6, 1])
+                    # Try to find the key from the line
+                    key = None
+                    for k, v in st.session_state.scores.items():
+                        # rough match
+                        if line.split("→")[0].strip() in str(k) or True:
+                            # better: we store key in history now
+                            pass
+                    # We will store key in the history entry going forward
+                    stored_key = entry.get("keys", [None]*len(entry.get("lines", [])))[idx] if "keys" in entry else None
+
+                    cols = st.columns([5, 1, 1, 1])
                     with cols[0]:
                         st.write(line)
-                    with cols[1]:
-                        if is_admin and not st.session_state.get("standings"):
-                            if st.button("Edit", key=f"hist_edit_{entry['title']}_{idx}"):
-                                st.session_state[f"editing_line_{entry['title']}_{idx}"] = True
-                    if st.session_state.get(f"editing_line_{entry['title']}_{idx}"):
-                        pwd = st.text_input("Edit Password", type="password", key=f"pwd_edit_{entry['title']}_{idx}")
-                        if pwd == st.session_state.edit_password:
-                            st.success("Edit unlocked for this match – go to Court Board to change the score")
-                            st.session_state.edit_unlocked = True
-                        elif pwd:
-                            st.error("Wrong Edit Password")
+                    if is_admin and stored_key:
+                        with cols[1]:
+                            s1 = st.number_input("S1", 0, 30, st.session_state.scores.get(stored_key, (0,0))[0], key=f"hs1_{e_idx}_{idx}")
+                        with cols[2]:
+                            s2 = st.number_input("S2", 0, 30, st.session_state.scores.get(stored_key, (0,0))[1], key=f"hs2_{e_idx}_{idx}")
+                        with cols[3]:
+                            if st.button("Save", key=f"hsave_{e_idx}_{idx}"):
+                                pwd = st.session_state.get(f"hpwd_{e_idx}_{idx}", "")
+                                if not pwd:
+                                    st.session_state[f"need_pwd_{e_idx}_{idx}"] = True
+                                if st.session_state.get(f"need_pwd_{e_idx}_{idx}"):
+                                    pwd_input = st.text_input("Edit Password", type="password", key=f"hpwd_input_{e_idx}_{idx}")
+                                    if pwd_input == st.session_state.edit_password:
+                                        st.session_state.scores[stored_key] = (s1, s2)
+                                        # Update the display line
+                                        parts = line.split("→")
+                                        new_line = parts[0] + f"→ {s1}-{s2}"
+                                        st.session_state.full_score_history[e_idx]["lines"][idx] = new_line
+                                        save_state()
+                                        st.success("Score updated")
+                                        st.rerun()
+                                    elif pwd_input:
+                                        st.error("Wrong Edit Password")
+                    elif is_admin:
+                        st.caption("(older entry – key missing)")
         else:
             st.caption("No scores recorded yet.")
 
@@ -918,8 +979,9 @@ if st.session_state.get("created"):
 
                                 line = f"{status['pool']} Match {status['round']}: {t1[0]} & {t1[1]} vs {t2[0]} & {t2[1]} → {s1}-{s2}"
                                 if not st.session_state.full_score_history or st.session_state.full_score_history[-1]["title"] != f"Round {st.session_state.cycle} Scores":
-                                    st.session_state.full_score_history.append({"title": f"Round {st.session_state.cycle} Scores", "lines": []})
+                                    st.session_state.full_score_history.append({"title": f"Round {st.session_state.cycle} Scores", "lines": [], "keys": []})
                                 st.session_state.full_score_history[-1]["lines"].append(line)
+                                st.session_state.full_score_history[-1]["keys"].append(key)
 
                                 if use_shared:
                                     if st.session_state.match_queue:
@@ -1025,21 +1087,17 @@ if st.session_state.get("created"):
         st.markdown("---")
         centered_title(f"Rankings after Round {st.session_state.cycle}")
 
-        # Edit Round button
         if is_admin:
             if st.button("✏️ Edit This Round (re-enter scores)"):
                 pwd = st.text_input("Edit Password to re-open round", type="password", key="edit_round_pwd")
                 if pwd == st.session_state.edit_password:
-                    # Reset back to court board so scores can be re-edited
                     st.session_state.standings = None
                     st.session_state.relevant_ties = None
                     st.session_state.skinny_results = {}
-                    # Unlock all matches of current cycle so they can be edited
                     for k in list(st.session_state.locked_matches.keys()):
-                        if f"_r{st.session_state.cycle-1}_" in k or True:
-                            st.session_state.locked_matches[k] = False
+                        st.session_state.locked_matches[k] = False
                     save_state()
-                    st.success("Round re-opened. You can now edit scores on the Court Board.")
+                    st.success("Round re-opened. You can now edit scores.")
                     st.rerun()
                 elif pwd:
                     st.error("Wrong Edit Password")
