@@ -35,6 +35,20 @@ def month_range_str(start_date_str=None):
     except:
         return f"{month_abbr[date.today().month]} {date.today().year}"
 
+def clean_season(s):
+    """Force clean format like 'Aug 2026'"""
+    if not s:
+        return month_range_str()
+    s = str(s).strip()
+    # If it looks like a date 2026-08-16
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        try:
+            d = date.fromisoformat(s)
+            return f"{month_abbr[d.month]} {d.year}"
+        except:
+            pass
+    return s
+
 def load_overall_ladder():
     try:
         result = supabase.table("master_ladder").select("*").order("current_rank").execute()
@@ -82,7 +96,6 @@ def save_overall_ladder(players_stats):
 def archive_and_clear_ladder():
     try:
         current = load_overall_ladder()
-        # Archive to last_season_ladder
         supabase.table("last_season_ladder").delete().neq("id", 0).execute()
         if current:
             rows = []
@@ -95,7 +108,6 @@ def archive_and_clear_ladder():
                     "notes": p.get("notes", "")
                 })
             supabase.table("last_season_ladder").insert(rows).execute()
-        # Clear current
         supabase.table("master_ladder").delete().neq("id", 0).execute()
         return True
     except Exception as e:
@@ -147,13 +159,21 @@ def load_hof():
         return []
 
 def add_to_hall_of_fame(player_name, season_str):
+    season_str = clean_season(season_str)
     try:
         existing = supabase.table("hall_of_fame").select("*").eq("player_name", player_name).execute()
         if existing.data:
-            current = existing.data[0].get("championships", 0)
+            row = existing.data[0]
+            current = row.get("championships", 0)
+            old_seasons = row.get("last_season", "") or ""
+            # Build list of seasons
+            seasons = [s.strip() for s in old_seasons.split(",") if s.strip()]
+            if season_str not in seasons:
+                seasons.append(season_str)
+            new_seasons = ", ".join(seasons)
             supabase.table("hall_of_fame").update({
                 "championships": current + 1,
-                "last_season": season_str
+                "last_season": new_seasons
             }).eq("player_name", player_name).execute()
         else:
             supabase.table("hall_of_fame").insert({
@@ -276,11 +296,14 @@ def assign_medals(sorted_list, key_func):
         prev_key = key
     return result
 
-def build_interleaved_queue(schedules, pool_names):
+def build_interleaved_queue(schedules, pool_names, pools):
+    """Prioritise larger pools first"""
+    # Sort pools by size descending
+    sorted_pools = sorted(pool_names, key=lambda p: len(pools.get(p, [])), reverse=True)
     queue = []
     max_rounds = max((len(schedules.get(p, [])) for p in pool_names), default=0)
     for r in range(max_rounds):
-        for pname in pool_names:
+        for pname in sorted_pools:
             sched = schedules.get(pname, [])
             if r < len(sched):
                 match_idx = 0
@@ -290,9 +313,11 @@ def build_interleaved_queue(schedules, pool_names):
                         match_idx += 1
     return queue
 
-def build_court_queues(schedules, pool_names, court_names):
+def build_court_queues(schedules, pool_names, court_names, pools):
+    """Assign larger pools to courts first when possible"""
+    sorted_pools = sorted(pool_names, key=lambda p: len(pools.get(p, [])), reverse=True)
     court_queues = {}
-    for i, pname in enumerate(pool_names):
+    for i, pname in enumerate(sorted_pools):
         if i >= len(court_names):
             break
         court = court_names[i]
@@ -542,11 +567,12 @@ if st.session_state.show_hof_page:
         rows = []
         for i, p in enumerate(hof):
             medal = "🥇 " if i == 0 else "🥈 " if i == 1 else "🥉 " if i == 2 else ""
+            seasons = clean_season(p.get("last_season", "-"))
             rows.append({
                 "Rank": f"{medal}{i+1}",
                 "Player": p["player_name"],
                 "Championships": p.get("championships", 0),
-                "Season": p.get("last_season", "-")
+                "Season": seasons
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     else:
@@ -693,13 +719,13 @@ Skyler, 3.9"""
                 court_queues = {}
 
                 if use_shared:
-                    match_queue = build_interleaved_queue(schedules, pool_names)
+                    match_queue = build_interleaved_queue(schedules, pool_names, pools)
                     for i, court in enumerate(court_names):
                         if i < len(match_queue):
                             court_status[court] = match_queue[i]
                     match_queue = match_queue[len(court_names):]
                 else:
-                    court_queues = build_court_queues(schedules, pool_names, court_names)
+                    court_queues = build_court_queues(schedules, pool_names, court_names, pools)
                     for court, q in court_queues.items():
                         if q:
                             court_status[court] = q[0]
@@ -967,34 +993,44 @@ if st.session_state.get("created"):
                             "data": st.session_state.standings
                         })
 
+                        # === BALANCED MOVEMENT (preserve sizes) ===
                         final_rankings = st.session_state.standings
                         new_pools = {name: [] for name in pool_names}
                         display_data = {name: [] for name in pool_names}
+
+                        # Determine movers for each boundary using the LOWER pool's movers setting
                         movers_up = {name: [] for name in pool_names}
                         movers_down = {name: [] for name in pool_names}
 
-                        for p_idx, pname in enumerate(pool_names):
-                            ranking = final_rankings[pname]
-                            move_n = pool_movers.get(pname, 1)
-                            move_n = min(move_n, len(ranking)//2) if len(ranking) >= 2 else 0
-                            if p_idx > 0 and move_n > 0:
-                                up_list = ranking[:move_n]
-                                if f"{pname}_top (move up)" in st.session_state.skinny_results:
-                                    selected = st.session_state.skinny_results[f"{pname}_top (move up)"]
-                                    up_list = [r for r in ranking if r["name"] in selected][:move_n]
-                                movers_up[pname] = up_list
-                            if p_idx < num_pools-1 and move_n > 0:
-                                down_list = ranking[-move_n:]
-                                if f"{pname}_bottom (move down)" in st.session_state.skinny_results:
-                                    selected = st.session_state.skinny_results[f"{pname}_bottom (move down)"]
-                                    down_list = [r for r in ranking if r["name"] in selected][-move_n:]
-                                movers_down[pname] = down_list
+                        for p_idx in range(len(pool_names) - 1):
+                            lower = pool_names[p_idx + 1]
+                            upper = pool_names[p_idx]
+                            move_n = pool_movers.get(lower, 1)
+                            move_n = min(move_n, len(final_rankings[lower]) // 2, len(final_rankings[upper]) // 2)
+                            if move_n < 1:
+                                continue
 
+                            # Top of lower move up
+                            up_list = final_rankings[lower][:move_n]
+                            if f"{lower}_top (move up)" in st.session_state.skinny_results:
+                                selected = st.session_state.skinny_results[f"{lower}_top (move up)"]
+                                up_list = [r for r in final_rankings[lower] if r["name"] in selected][:move_n]
+                            movers_up[lower] = up_list
+
+                            # Bottom of upper move down
+                            down_list = final_rankings[upper][-move_n:]
+                            if f"{upper}_bottom (move down)" in st.session_state.skinny_results:
+                                selected = st.session_state.skinny_results[f"{upper}_bottom (move down)"]
+                                down_list = [r for r in final_rankings[upper] if r["name"] in selected][-move_n:]
+                            movers_down[upper] = down_list
+
+                        # Build new pools
                         for p_idx, pname in enumerate(pool_names):
                             ranking = final_rankings[pname]
                             staying = [r for r in ranking if not any(r["name"] == m["name"] for m in movers_up.get(pname, []) + movers_down.get(pname, []))]
-                            incoming_down = movers_down.get(pool_names[p_idx-1], []) if p_idx > 0 else []
-                            incoming_up = movers_up.get(pool_names[p_idx+1], []) if p_idx < num_pools-1 else []
+                            incoming_down = movers_down.get(pool_names[p_idx - 1], []) if p_idx > 0 else []
+                            incoming_up = movers_up.get(pool_names[p_idx + 1], []) if p_idx < num_pools - 1 else []
+
                             ordered = []
                             for r in incoming_down:
                                 ordered.append({"Player": r["name"], "Note": f"(down from {pool_names[p_idx-1]})"})
@@ -1035,13 +1071,13 @@ if st.session_state.get("created"):
                         court_status = {c: None for c in court_names}
                         court_queues = {}
                         if use_shared:
-                            match_queue = build_interleaved_queue(new_schedules, pool_names)
+                            match_queue = build_interleaved_queue(new_schedules, pool_names, new_pools)
                             for i, court in enumerate(court_names):
                                 if i < len(match_queue):
                                     court_status[court] = match_queue[i]
                             match_queue = match_queue[len(court_names):]
                         else:
-                            court_queues = build_court_queues(new_schedules, pool_names, court_names)
+                            court_queues = build_court_queues(new_schedules, pool_names, court_names, new_pools)
                             for court, q in court_queues.items():
                                 if q:
                                     court_status[court] = q[0]
