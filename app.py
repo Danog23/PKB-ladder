@@ -152,7 +152,6 @@ def load_hof():
     try:
         result = supabase.table("hall_of_fame").select("*").execute()
         data = result.data if result.data else []
-        # Sort: championships desc, then total_diff desc
         def sort_key(row):
             champs = row.get("championships", 0)
             notes = row.get("notes", "")
@@ -182,7 +181,6 @@ def add_to_hall_of_fame(player_name, season_str, total_diff=0):
             if season_str not in seasons:
                 seasons.append(season_str)
             new_seasons = ", ".join(seasons)
-            # Keep the highest total_diff we have
             old_diff = 0
             try:
                 for part in (row.get("notes") or "").split("|"):
@@ -482,15 +480,17 @@ with c7:
         if st.button("End Season"):
             st.session_state.show_end_season = True
 
-# Dialogs
+# ---------- Dialogs with Confirm buttons ----------
 if st.session_state.get("show_admin_login") and not st.session_state.admin_unlocked:
+    st.subheader("Admin Login")
     pwd = st.text_input("Enter Admin Password", type="password", key="admin_login")
-    if pwd == st.session_state.admin_password:
-        st.session_state.admin_unlocked = True
-        st.session_state.show_admin_login = False
-        st.rerun()
-    elif pwd:
-        st.error("Wrong password")
+    if st.button("Confirm Admin Login"):
+        if pwd == st.session_state.admin_password:
+            st.session_state.admin_unlocked = True
+            st.session_state.show_admin_login = False
+            st.rerun()
+        else:
+            st.error("Wrong password")
 
 if st.session_state.get("show_change_admin_pwd") and st.session_state.admin_unlocked:
     st.subheader("Change Admin Password")
@@ -523,48 +523,49 @@ if st.session_state.get("show_change_edit_pwd") and st.session_state.admin_unloc
 if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
     st.warning("This will archive the current Overall Ladder as Last Season, clear it, and add the #1 player to the Hall of Fame.")
     pwd = st.text_input("Admin Password to End Season", type="password", key="end_season_pwd")
-    if pwd == st.session_state.admin_password:
-        ladder = get_top10_ladder()
-        season_str = month_range_str(st.session_state.get("season_start"))
-        if ladder:
-            champion = ladder[0]["player_name"]
-            # Get total +/- from notes
-            total_diff = 0
-            try:
-                for part in (ladder[0].get("notes") or "").split("|"):
-                    if part.startswith("diff:"):
-                        total_diff = int(part.split(":")[1])
-            except:
-                pass
-            add_to_hall_of_fame(champion, season_str, total_diff)
-            success = archive_and_clear_ladder()
-            if success:
-                st.session_state.season_start = str(date.today())
-                st.success(f"✅ Season ended!\n\n**{champion}** added to Hall of Fame.\nOverall Ladder has been archived and cleared.")
+    if st.button("Confirm End Season"):
+        if pwd == st.session_state.admin_password:
+            ladder = get_top10_ladder()
+            season_str = month_range_str(st.session_state.get("season_start"))
+            if ladder:
+                champion = ladder[0]["player_name"]
+                total_diff = 0
+                try:
+                    for part in (ladder[0].get("notes") or "").split("|"):
+                        if part.startswith("diff:"):
+                            total_diff = int(part.split(":")[1])
+                except:
+                    pass
+                add_to_hall_of_fame(champion, season_str, total_diff)
+                success = archive_and_clear_ladder()
+                if success:
+                    st.session_state.season_start = str(date.today())
+                    st.success(f"✅ Season ended!\n\n**{champion}** added to Hall of Fame.")
+                else:
+                    st.error("Failed to archive ladder.")
             else:
-                st.error("Failed to archive ladder.")
+                archive_and_clear_ladder()
+                st.session_state.season_start = str(date.today())
+                st.info("Overall Ladder was empty. New season started.")
+            st.session_state.show_end_season = False
+            st.rerun()
         else:
-            archive_and_clear_ladder()
-            st.session_state.season_start = str(date.today())
-            st.info("Overall Ladder was empty. New season started.")
-        st.session_state.show_end_season = False
-        st.rerun()
-    elif pwd:
-        st.error("Wrong password")
+            st.error("Wrong password")
 
 if st.session_state.get("show_reset_hof") and st.session_state.admin_unlocked:
     st.warning("This will permanently delete the Hall of Fame.")
     pwd = st.text_input("Admin Password to Reset Hall of Fame", type="password", key="reset_hof_pwd")
-    if pwd == st.session_state.admin_password:
-        try:
-            supabase.table("hall_of_fame").delete().neq("id", 0).execute()
-            st.session_state.show_reset_hof = False
-            st.success("Hall of Fame has been reset.")
-            st.rerun()
-        except Exception as e:
-            st.error(str(e))
-    elif pwd:
-        st.error("Wrong password")
+    if st.button("Confirm Reset Hall of Fame"):
+        if pwd == st.session_state.admin_password:
+            try:
+                supabase.table("hall_of_fame").delete().neq("id", 0).execute()
+                st.session_state.show_reset_hof = False
+                st.success("Hall of Fame has been reset.")
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
+        else:
+            st.error("Wrong password")
 
 st.markdown("---")
 
@@ -662,9 +663,7 @@ if st.session_state.show_hof_page:
                 edit_champs = st.number_input("Championships", min_value=0, value=1)
                 if st.button("Update Championships"):
                     try:
-                        supabase.table("hall_of_fame").update({
-                            "championships": edit_champs
-                        }).eq("player_name", selected).execute()
+                        supabase.table("hall_of_fame").update({"championships": edit_champs}).eq("player_name", selected).execute()
                         st.success("Updated")
                         st.rerun()
                     except Exception as e:
@@ -689,7 +688,7 @@ if st.session_state.admin_unlocked and not st.session_state.get("created"):
         players_per_pool = st.selectbox("Players per pool", [4, 5, 6], 0)
 
     play_to = st.number_input("Play to", 7, 21, 9)
-    st.caption("Movers defaults: 4-player → 1, 5-player → 2, 6-player → 3 (can be changed after pools are created)")
+    st.caption("Movers defaults: 4-player → 1, 5-player → 2, 6-player → 3")
 
     st.header("2. Enter Players")
     st.caption("Format: Name, DUPR. Players from last session are pre-filled when available.")
@@ -850,7 +849,7 @@ if st.session_state.get("created"):
 
     st.caption(f"Courts: {st.session_state.num_courts} | Pools: {num_pools} | Play to: {play_to} | Season: {month_range_str(st.session_state.get('season_start'))}")
 
-    # Score History with direct edit
+    # Score History with direct edit + Confirm button
     if st.button("📜 Show / Hide Score History"):
         st.session_state.show_score_history = not st.session_state.show_score_history
 
@@ -859,18 +858,10 @@ if st.session_state.get("created"):
         if st.session_state.full_score_history:
             for e_idx, entry in enumerate(st.session_state.full_score_history):
                 st.markdown(f"**{entry['title']}**")
+                keys = entry.get("keys", [None] * len(entry.get("lines", [])))
                 for idx, line in enumerate(entry.get("lines", [])):
-                    # Try to find the key from the line
-                    key = None
-                    for k, v in st.session_state.scores.items():
-                        # rough match
-                        if line.split("→")[0].strip() in str(k) or True:
-                            # better: we store key in history now
-                            pass
-                    # We will store key in the history entry going forward
-                    stored_key = entry.get("keys", [None]*len(entry.get("lines", [])))[idx] if "keys" in entry else None
-
-                    cols = st.columns([5, 1, 1, 1])
+                    stored_key = keys[idx] if idx < len(keys) else None
+                    cols = st.columns([5, 1, 1, 1.5])
                     with cols[0]:
                         st.write(line)
                     if is_admin and stored_key:
@@ -879,25 +870,32 @@ if st.session_state.get("created"):
                         with cols[2]:
                             s2 = st.number_input("S2", 0, 30, st.session_state.scores.get(stored_key, (0,0))[1], key=f"hs2_{e_idx}_{idx}")
                         with cols[3]:
-                            if st.button("Save", key=f"hsave_{e_idx}_{idx}"):
-                                pwd = st.session_state.get(f"hpwd_{e_idx}_{idx}", "")
-                                if not pwd:
-                                    st.session_state[f"need_pwd_{e_idx}_{idx}"] = True
-                                if st.session_state.get(f"need_pwd_{e_idx}_{idx}"):
-                                    pwd_input = st.text_input("Edit Password", type="password", key=f"hpwd_input_{e_idx}_{idx}")
-                                    if pwd_input == st.session_state.edit_password:
-                                        st.session_state.scores[stored_key] = (s1, s2)
-                                        # Update the display line
-                                        parts = line.split("→")
-                                        new_line = parts[0] + f"→ {s1}-{s2}"
-                                        st.session_state.full_score_history[e_idx]["lines"][idx] = new_line
-                                        save_state()
-                                        st.success("Score updated")
-                                        st.rerun()
-                                    elif pwd_input:
-                                        st.error("Wrong Edit Password")
+                            if st.button("Save Score", key=f"hsave_{e_idx}_{idx}"):
+                                st.session_state[f"pending_edit_{e_idx}_{idx}"] = (s1, s2, stored_key, e_idx, idx)
                     elif is_admin:
-                        st.caption("(older entry – key missing)")
+                        st.caption("(older entry)")
+
+                    # Password confirm for this edit
+                    if st.session_state.get(f"pending_edit_{e_idx}_{idx}"):
+                        s1, s2, stored_key, e_idx2, idx2 = st.session_state[f"pending_edit_{e_idx}_{idx}"]
+                        pwd = st.text_input("Edit Password", type="password", key=f"hpwd_{e_idx}_{idx}")
+                        if st.button("Confirm Score Change", key=f"hconfirm_{e_idx}_{idx}"):
+                            if pwd == st.session_state.edit_password:
+                                st.session_state.scores[stored_key] = (s1, s2)
+                                parts = line.split("→")
+                                new_line = parts[0] + f"→ {s1}-{s2}"
+                                st.session_state.full_score_history[e_idx]["lines"][idx] = new_line
+                                # Clear rankings so they must be recalculated
+                                if st.session_state.get("standings"):
+                                    st.session_state.standings = None
+                                    st.session_state.relevant_ties = None
+                                    st.session_state.skinny_results = {}
+                                del st.session_state[f"pending_edit_{e_idx}_{idx}"]
+                                save_state()
+                                st.success("Score updated. Rankings cleared – please recalculate.")
+                                st.rerun()
+                            else:
+                                st.error("Wrong Edit Password")
         else:
             st.caption("No scores recorded yet.")
 
@@ -929,7 +927,6 @@ if st.session_state.get("created"):
                     st.markdown(f"<h4 style='text-align:center'>{pname}</h4>", unsafe_allow_html=True)
                     st.dataframe(pd.DataFrame([{"Player": r["Player"], "Note": r.get("Note", "")} for r in rows]), hide_index=True, use_container_width=True)
 
-    # Upcoming Schedule
     if not st.session_state.get("final_done"):
         upcoming = get_upcoming_matches()
         if upcoming:
@@ -958,14 +955,18 @@ if st.session_state.get("created"):
                     locked = st.session_state.locked_matches.get(key, False)
                     if locked:
                         st.write(f"Score: **{current[0]} – {current[1]}**")
-                        if st.button("🔓 Unlock to Edit", key=f"unlock_{key}"):
+                        if st.button("🔓 Unlock", key=f"unlock_{key}"):
+                            st.session_state[f"pending_unlock_{key}"] = True
+                        if st.session_state.get(f"pending_unlock_{key}"):
                             pwd = st.text_input("Edit Password", type="password", key=f"pwd_unlock_{key}")
-                            if pwd == st.session_state.edit_password:
-                                st.session_state.locked_matches[key] = False
-                                save_state()
-                                st.rerun()
-                            elif pwd:
-                                st.error("Wrong Edit Password")
+                            if st.button("Confirm Unlock", key=f"confirm_unlock_{key}"):
+                                if pwd == st.session_state.edit_password:
+                                    st.session_state.locked_matches[key] = False
+                                    del st.session_state[f"pending_unlock_{key}"]
+                                    save_state()
+                                    st.rerun()
+                                else:
+                                    st.error("Wrong Edit Password")
                     else:
                         with col2:
                             s1 = st.number_input("Score 1", 0, 30, int(current[0]), key=f"s1_{key}")
@@ -1088,19 +1089,23 @@ if st.session_state.get("created"):
         centered_title(f"Rankings after Round {st.session_state.cycle}")
 
         if is_admin:
-            if st.button("✏️ Edit This Round (re-enter scores)"):
-                pwd = st.text_input("Edit Password to re-open round", type="password", key="edit_round_pwd")
-                if pwd == st.session_state.edit_password:
-                    st.session_state.standings = None
-                    st.session_state.relevant_ties = None
-                    st.session_state.skinny_results = {}
-                    for k in list(st.session_state.locked_matches.keys()):
-                        st.session_state.locked_matches[k] = False
-                    save_state()
-                    st.success("Round re-opened. You can now edit scores.")
-                    st.rerun()
-                elif pwd:
-                    st.error("Wrong Edit Password")
+            if st.button("✏️ Edit This Round"):
+                st.session_state["pending_edit_round"] = True
+            if st.session_state.get("pending_edit_round"):
+                pwd = st.text_input("Edit Password", type="password", key="edit_round_pwd")
+                if st.button("Confirm Re-open Round"):
+                    if pwd == st.session_state.edit_password:
+                        st.session_state.standings = None
+                        st.session_state.relevant_ties = None
+                        st.session_state.skinny_results = {}
+                        for k in list(st.session_state.locked_matches.keys()):
+                            st.session_state.locked_matches[k] = False
+                        del st.session_state["pending_edit_round"]
+                        save_state()
+                        st.success("Round re-opened.")
+                        st.rerun()
+                    else:
+                        st.error("Wrong Edit Password")
 
         cols = st.columns(min(len(pool_names), 4))
         for i, pname in enumerate(pool_names):
