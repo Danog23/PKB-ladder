@@ -36,11 +36,9 @@ def month_range_str(start_date_str=None):
         return f"{month_abbr[date.today().month]} {date.today().year}"
 
 def clean_season(s):
-    """Force clean format like 'Aug 2026'"""
     if not s:
         return month_range_str()
     s = str(s).strip()
-    # If it looks like a date 2026-08-16
     if len(s) == 10 and s[4] == "-" and s[7] == "-":
         try:
             d = date.fromisoformat(s)
@@ -166,7 +164,6 @@ def add_to_hall_of_fame(player_name, season_str):
             row = existing.data[0]
             current = row.get("championships", 0)
             old_seasons = row.get("last_season", "") or ""
-            # Build list of seasons
             seasons = [s.strip() for s in old_seasons.split(",") if s.strip()]
             if season_str not in seasons:
                 seasons.append(season_str)
@@ -297,8 +294,6 @@ def assign_medals(sorted_list, key_func):
     return result
 
 def build_interleaved_queue(schedules, pool_names, pools):
-    """Prioritise larger pools first"""
-    # Sort pools by size descending
     sorted_pools = sorted(pool_names, key=lambda p: len(pools.get(p, [])), reverse=True)
     queue = []
     max_rounds = max((len(schedules.get(p, [])) for p in pool_names), default=0)
@@ -314,7 +309,6 @@ def build_interleaved_queue(schedules, pool_names, pools):
     return queue
 
 def build_court_queues(schedules, pool_names, court_names, pools):
-    """Assign larger pools to courts first when possible"""
     sorted_pools = sorted(pool_names, key=lambda p: len(pools.get(p, [])), reverse=True)
     court_queues = {}
     for i, pname in enumerate(sorted_pools):
@@ -913,20 +907,27 @@ if st.session_state.get("created"):
                     ranking.sort(key=lambda x: (x["diff"], x["wins"]), reverse=True)
                     standings[pname] = ranking
 
+                    # Skinny singles detection - improved
                     move_n = pool_movers.get(pname, 1)
                     n = len(ranking)
                     move_n = min(move_n, n // 2) if n >= 2 else 0
                     ties = []
-                    if p_idx > 0 and move_n > 0:
-                        sc = (ranking[move_n-1]["diff"], ranking[move_n-1]["wins"])
-                        grp = [r["name"] for r in ranking if (r["diff"], r["wins"]) == sc]
+
+                    if p_idx > 0 and move_n > 0:  # can move up
+                        # Find all players tied with the cut-off player for moving up
+                        cut_diff = ranking[move_n - 1]["diff"]
+                        cut_wins = ranking[move_n - 1]["wins"]
+                        grp = [r["name"] for r in ranking if r["diff"] == cut_diff and r["wins"] == cut_wins]
                         if len(grp) > move_n:
-                            ties.append({"zone": "top (move up)", "players": grp, "needed": move_n, "score": ranking[move_n-1]["diff"]})
-                    if p_idx < num_pools-1 and move_n > 0:
-                        sc = (ranking[-move_n]["diff"], ranking[-move_n]["wins"])
-                        grp = [r["name"] for r in ranking if (r["diff"], r["wins"]) == sc]
+                            ties.append({"zone": "top (move up)", "players": grp, "needed": move_n, "score": cut_diff})
+
+                    if p_idx < num_pools - 1 and move_n > 0:  # can move down
+                        cut_diff = ranking[-move_n]["diff"]
+                        cut_wins = ranking[-move_n]["wins"]
+                        grp = [r["name"] for r in ranking if r["diff"] == cut_diff and r["wins"] == cut_wins]
                         if len(grp) > move_n:
-                            ties.append({"zone": "bottom (move down)", "players": grp, "needed": move_n, "score": ranking[-move_n]["diff"]})
+                            ties.append({"zone": "bottom (move down)", "players": grp, "needed": move_n, "score": cut_diff})
+
                     if ties:
                         relevant_ties[pname] = ties
 
@@ -956,7 +957,7 @@ if st.session_state.get("created"):
                     key = f"{pname}_{tie['zone']}"
                     selected = []
                     st.write(f"**{pname} – {tie['zone']}** (tied at {tie['score']:+d})")
-                    st.write(f"Select exactly {tie['needed']} player(s):")
+                    st.write(f"Select exactly **{tie['needed']}** player(s):")
                     cbs = st.columns(min(len(tie["players"]), 4))
                     for i, p in enumerate(tie["players"]):
                         with cbs[i % len(cbs)]:
@@ -966,11 +967,16 @@ if st.session_state.get("created"):
                     if len(selected) == tie["needed"]:
                         st.session_state.skinny_results[key] = selected
                         st.success(f"Selected: {', '.join(selected)}")
+                    elif len(selected) > 0:
+                        st.warning(f"Selected {len(selected)} – need exactly {tie['needed']}")
+
             up_players = set()
             down_players = set()
             for key, selected in current_selections.items():
-                if "move up" in key: up_players.update(selected)
-                if "move down" in key: down_players.update(selected)
+                if "move up" in key:
+                    up_players.update(selected)
+                if "move down" in key:
+                    down_players.update(selected)
             conflict = up_players.intersection(down_players)
             if conflict:
                 has_conflict = True
@@ -993,12 +999,10 @@ if st.session_state.get("created"):
                             "data": st.session_state.standings
                         })
 
-                        # === BALANCED MOVEMENT (preserve sizes) ===
+                        # Balanced movement
                         final_rankings = st.session_state.standings
                         new_pools = {name: [] for name in pool_names}
                         display_data = {name: [] for name in pool_names}
-
-                        # Determine movers for each boundary using the LOWER pool's movers setting
                         movers_up = {name: [] for name in pool_names}
                         movers_down = {name: [] for name in pool_names}
 
@@ -1010,21 +1014,18 @@ if st.session_state.get("created"):
                             if move_n < 1:
                                 continue
 
-                            # Top of lower move up
                             up_list = final_rankings[lower][:move_n]
                             if f"{lower}_top (move up)" in st.session_state.skinny_results:
                                 selected = st.session_state.skinny_results[f"{lower}_top (move up)"]
                                 up_list = [r for r in final_rankings[lower] if r["name"] in selected][:move_n]
                             movers_up[lower] = up_list
 
-                            # Bottom of upper move down
                             down_list = final_rankings[upper][-move_n:]
                             if f"{upper}_bottom (move down)" in st.session_state.skinny_results:
                                 selected = st.session_state.skinny_results[f"{upper}_bottom (move down)"]
                                 down_list = [r for r in final_rankings[upper] if r["name"] in selected][-move_n:]
                             movers_down[upper] = down_list
 
-                        # Build new pools
                         for p_idx, pname in enumerate(pool_names):
                             ranking = final_rankings[pname]
                             staying = [r for r in ranking if not any(r["name"] == m["name"] for m in movers_up.get(pname, []) + movers_down.get(pname, []))]
@@ -1148,20 +1149,41 @@ if st.session_state.get("created"):
 
         st.success("Session complete! Overall Ladder has been updated.")
 
+        # ========== IMPROVED EXCEL EXPORT ==========
         st.markdown("---")
         try:
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                # Sheet 1: Day Results
                 pd.DataFrame({
                     "Player": list(cum.keys()),
                     "+/−": [v["diff"] for v in cum.values()],
                     "Wins": [v["wins"] for v in cum.values()]
                 }).to_excel(writer, sheet_name="Day Results", index=False)
+
+                # Sheet 2: Biggest Climbers
                 if climbers:
                     pd.DataFrame(climbers).to_excel(writer, sheet_name="Biggest Climbers", index=False)
-            st.download_button("📥 Download Excel Report", output.getvalue(), "pickleball_session_report.xlsx")
+
+                # Sheet 3: All Match Scores
+                match_rows = []
+                for entry in st.session_state.get("full_score_history", []):
+                    for line in entry.get("lines", []):
+                        match_rows.append({"Round": entry["title"], "Match": line})
+                if match_rows:
+                    pd.DataFrame(match_rows).to_excel(writer, sheet_name="All Match Scores", index=False)
+
+                # Sheet 4: Rankings history
+                for entry in st.session_state.get("assignment_history", []):
+                    if entry["type"] == "rankings":
+                        for pname, ranking in entry["data"].items():
+                            df = pd.DataFrame([{"#": j+1, "Player": r["name"], "+/−": r["diff"], "W": r["wins"]} for j, r in enumerate(ranking)])
+                            sheet_name = f"{entry['title'][:20]}_{pname}"[:31]
+                            df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+            st.download_button("📥 Download Full Excel Report", output.getvalue(), "pickleball_full_session_report.xlsx")
         except Exception as e:
-            st.warning(str(e))
+            st.warning(f"Excel export error: {e}")
 
 if st.session_state.get("created"):
     save_state()
