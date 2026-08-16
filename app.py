@@ -191,7 +191,7 @@ def save_state():
         "players", "pools", "pool_names", "court_names", "schedules", "scores",
         "num_courts", "num_pools", "players_per_pool", "pool_movers",
         "cycle", "standings", "relevant_ties", "skinny_results",
-        "cumulative", "assignment_history", "final_done", "admin_password",
+        "cumulative", "assignment_history", "final_done", "admin_password", "edit_password",
         "play_to", "full_score_history", "locked_matches", "initial_ranks",
         "use_shared_courts", "match_queue", "court_status", "completed_matches",
         "court_queues", "player_notes", "season_start", "last_players_text"
@@ -329,9 +329,7 @@ def centered_title(text):
     st.markdown(f"<h3 style='text-align: center;'>{text}</h3>", unsafe_allow_html=True)
 
 def get_upcoming_matches():
-    """Build a readable list of upcoming matches for the schedule display"""
     upcoming = []
-    # Currently playing
     for court, status in st.session_state.get("court_status", {}).items():
         if status:
             t1, t2 = status["match"]
@@ -340,7 +338,6 @@ def get_upcoming_matches():
                 "Pool": status["pool"],
                 "Match": f"{t1[0]} & {t1[1]} vs {t2[0]} & {t2[1]}"
             })
-    # Queue
     if st.session_state.get("use_shared_courts"):
         for item in st.session_state.get("match_queue", [])[:12]:
             t1, t2 = item["match"]
@@ -365,6 +362,8 @@ if "admin_unlocked" not in st.session_state:
     st.session_state.admin_unlocked = False
 if "admin_password" not in st.session_state:
     st.session_state.admin_password = "2302"
+if "edit_password" not in st.session_state:
+    st.session_state.edit_password = "1234"
 if "created" not in st.session_state:
     load_state()
 if "full_score_history" not in st.session_state:
@@ -405,6 +404,12 @@ if "season_start" not in st.session_state:
     st.session_state.season_start = str(date.today())
 if "last_players_text" not in st.session_state:
     st.session_state.last_players_text = ""
+if "show_change_admin_pwd" not in st.session_state:
+    st.session_state.show_change_admin_pwd = False
+if "show_change_edit_pwd" not in st.session_state:
+    st.session_state.show_change_edit_pwd = False
+if "edit_unlocked" not in st.session_state:
+    st.session_state.edit_unlocked = False
 
 # ---------- Top Bar ----------
 c1, c2, c3, c4, c5, c6, c7 = st.columns([1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3])
@@ -417,6 +422,7 @@ with c1:
         st.success("Admin Active")
         if st.button("User Mode"):
             st.session_state.admin_unlocked = False
+            st.session_state.edit_unlocked = False
             st.rerun()
 
 with c2:
@@ -431,7 +437,7 @@ with c4:
     if st.session_state.admin_unlocked:
         if st.button("Start New Session"):
             for key in list(st.session_state.keys()):
-                if key not in ["admin_password", "admin_unlocked", "last_players_text", "season_start"]:
+                if key not in ["admin_password", "edit_password", "admin_unlocked", "last_players_text", "season_start"]:
                     del st.session_state[key]
             try:
                 supabase.table("active_session").delete().neq("id", 0).execute()
@@ -442,13 +448,13 @@ with c4:
 
 with c5:
     if st.session_state.admin_unlocked:
-        if st.button("Change Password"):
-            st.session_state.show_change_password = True
+        if st.button("Change Admin Pwd"):
+            st.session_state.show_change_admin_pwd = True
 
 with c6:
     if st.session_state.admin_unlocked:
-        if st.button("Reset Ladder"):
-            st.session_state.show_reset_ladder = True
+        if st.button("Change Edit Pwd"):
+            st.session_state.show_change_edit_pwd = True
 
 with c7:
     if st.session_state.admin_unlocked:
@@ -465,32 +471,33 @@ if st.session_state.get("show_admin_login") and not st.session_state.admin_unloc
     elif pwd:
         st.error("Wrong password")
 
-if st.session_state.get("show_change_password") and st.session_state.admin_unlocked:
-    old = st.text_input("Current password", type="password", key="old_pwd")
-    new = st.text_input("New password", type="password", key="new_pwd")
-    if st.button("Update Password"):
+if st.session_state.get("show_change_admin_pwd") and st.session_state.admin_unlocked:
+    st.subheader("Change Admin Password")
+    old = st.text_input("Current Admin Password", type="password", key="old_admin")
+    new = st.text_input("New Admin Password", type="password", key="new_admin")
+    if st.button("Update Admin Password"):
         if old == st.session_state.admin_password and new and len(new) >= 4:
             st.session_state.admin_password = new
-            st.session_state.show_change_password = False
+            st.session_state.show_change_admin_pwd = False
             save_state()
-            st.success("Password updated")
+            st.success("Admin password updated")
             st.rerun()
         else:
             st.error("Incorrect or too short")
 
-if st.session_state.get("show_reset_ladder") and st.session_state.admin_unlocked:
-    st.warning("This will permanently delete the Overall Ladder.")
-    pwd = st.text_input("Admin Password to confirm", type="password", key="reset_ladder_pwd")
-    if pwd == st.session_state.admin_password:
-        try:
-            supabase.table("master_ladder").delete().neq("id", 0).execute()
-            st.session_state.show_reset_ladder = False
-            st.success("Overall Ladder reset.")
+if st.session_state.get("show_change_edit_pwd") and st.session_state.admin_unlocked:
+    st.subheader("Change Edit Password")
+    old = st.text_input("Current Admin Password (required)", type="password", key="old_for_edit")
+    new = st.text_input("New Edit Password", type="password", key="new_edit")
+    if st.button("Update Edit Password"):
+        if old == st.session_state.admin_password and new and len(new) >= 3:
+            st.session_state.edit_password = new
+            st.session_state.show_change_edit_pwd = False
+            save_state()
+            st.success("Edit password updated")
             st.rerun()
-        except Exception as e:
-            st.error(str(e))
-    elif pwd:
-        st.error("Wrong password")
+        else:
+            st.error("Incorrect admin password or too short")
 
 if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
     st.warning("This will archive the current Overall Ladder as Last Season, clear it, and add the #1 player to the Hall of Fame.")
@@ -806,6 +813,7 @@ if st.session_state.get("created"):
 
     st.caption(f"Courts: {st.session_state.num_courts} | Pools: {num_pools} | Play to: {play_to} | Season: {month_range_str(st.session_state.get('season_start'))}")
 
+    # Score History + Edit
     if st.button("📜 Show / Hide Score History"):
         st.session_state.show_score_history = not st.session_state.show_score_history
 
@@ -814,8 +822,21 @@ if st.session_state.get("created"):
         if st.session_state.full_score_history:
             for entry in st.session_state.full_score_history:
                 st.markdown(f"**{entry['title']}**")
-                for line in entry.get("lines", []):
-                    st.write(line)
+                for idx, line in enumerate(entry.get("lines", [])):
+                    cols = st.columns([6, 1])
+                    with cols[0]:
+                        st.write(line)
+                    with cols[1]:
+                        if is_admin and not st.session_state.get("standings"):
+                            if st.button("Edit", key=f"hist_edit_{entry['title']}_{idx}"):
+                                st.session_state[f"editing_line_{entry['title']}_{idx}"] = True
+                    if st.session_state.get(f"editing_line_{entry['title']}_{idx}"):
+                        pwd = st.text_input("Edit Password", type="password", key=f"pwd_edit_{entry['title']}_{idx}")
+                        if pwd == st.session_state.edit_password:
+                            st.success("Edit unlocked for this match – go to Court Board to change the score")
+                            st.session_state.edit_unlocked = True
+                        elif pwd:
+                            st.error("Wrong Edit Password")
         else:
             st.caption("No scores recorded yet.")
 
@@ -847,7 +868,7 @@ if st.session_state.get("created"):
                     st.markdown(f"<h4 style='text-align:center'>{pname}</h4>", unsafe_allow_html=True)
                     st.dataframe(pd.DataFrame([{"Player": r["Player"], "Note": r.get("Note", "")} for r in rows]), hide_index=True, use_container_width=True)
 
-    # ========== UPCOMING SCHEDULE ==========
+    # Upcoming Schedule
     if not st.session_state.get("final_done"):
         upcoming = get_upcoming_matches()
         if upcoming:
@@ -877,9 +898,13 @@ if st.session_state.get("created"):
                     if locked:
                         st.write(f"Score: **{current[0]} – {current[1]}**")
                         if st.button("🔓 Unlock to Edit", key=f"unlock_{key}"):
-                            st.session_state.locked_matches[key] = False
-                            save_state()
-                            st.rerun()
+                            pwd = st.text_input("Edit Password", type="password", key=f"pwd_unlock_{key}")
+                            if pwd == st.session_state.edit_password:
+                                st.session_state.locked_matches[key] = False
+                                save_state()
+                                st.rerun()
+                            elif pwd:
+                                st.error("Wrong Edit Password")
                     else:
                         with col2:
                             s1 = st.number_input("Score 1", 0, 30, int(current[0]), key=f"s1_{key}")
@@ -912,7 +937,6 @@ if st.session_state.get("created"):
                                 st.rerun()
                         with col5:
                             if st.button("Skip →", key=f"skip_{key}"):
-                                # Move this match to the end of the queue and bring the next one
                                 if use_shared:
                                     if st.session_state.match_queue:
                                         skipped = status
@@ -1000,6 +1024,26 @@ if st.session_state.get("created"):
     if st.session_state.get("standings") and not st.session_state.get("final_done"):
         st.markdown("---")
         centered_title(f"Rankings after Round {st.session_state.cycle}")
+
+        # Edit Round button
+        if is_admin:
+            if st.button("✏️ Edit This Round (re-enter scores)"):
+                pwd = st.text_input("Edit Password to re-open round", type="password", key="edit_round_pwd")
+                if pwd == st.session_state.edit_password:
+                    # Reset back to court board so scores can be re-edited
+                    st.session_state.standings = None
+                    st.session_state.relevant_ties = None
+                    st.session_state.skinny_results = {}
+                    # Unlock all matches of current cycle so they can be edited
+                    for k in list(st.session_state.locked_matches.keys()):
+                        if f"_r{st.session_state.cycle-1}_" in k or True:
+                            st.session_state.locked_matches[k] = False
+                    save_state()
+                    st.success("Round re-opened. You can now edit scores on the Court Board.")
+                    st.rerun()
+                elif pwd:
+                    st.error("Wrong Edit Password")
+
         cols = st.columns(min(len(pool_names), 4))
         for i, pname in enumerate(pool_names):
             with cols[i % len(cols)]:
