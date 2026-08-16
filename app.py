@@ -128,11 +128,11 @@ def save_state():
     data = {k: st.session_state.get(k) for k in [
         "players", "pools", "pool_names", "court_names", "schedules", "scores",
         "num_courts", "num_pools", "players_per_pool", "movers", "pool_movers",
-        "num_cycles", "cycle", "standings", "relevant_ties", "skinny_results",
+        "cycle", "standings", "relevant_ties", "skinny_results",
         "cumulative", "assignment_history", "final_done", "admin_password",
-        "cycle_snapshots", "play_to", "play_to_5", "full_score_history",
-        "locked_matches", "initial_ranks", "use_shared_courts", "match_queue",
-        "court_status", "completed_matches", "court_queues", "player_notes"
+        "play_to", "full_score_history", "locked_matches", "initial_ranks",
+        "use_shared_courts", "match_queue", "court_status", "completed_matches",
+        "court_queues", "player_notes"
     ]}
     try:
         supabase.table("active_session").delete().neq("id", 0).execute()
@@ -207,6 +207,13 @@ def smart_distribute(n_players, preferred_pools, preferred_size):
                 best = (score, sizes)
     return best[1] if best else []
 
+def default_movers_for_size(size):
+    if size <= 4:
+        return 1
+    if size == 5:
+        return 2
+    return 3  # 6 players
+
 def assign_medals(sorted_list, key_func):
     if not sorted_list:
         return []
@@ -261,8 +268,6 @@ if "admin_password" not in st.session_state:
     st.session_state.admin_password = "2302"
 if "created" not in st.session_state:
     load_state()
-if "cycle_snapshots" not in st.session_state:
-    st.session_state.cycle_snapshots = {}
 if "full_score_history" not in st.session_state:
     st.session_state.full_score_history = []
 if "locked_matches" not in st.session_state:
@@ -500,19 +505,15 @@ if st.session_state.admin_unlocked and not st.session_state.get("created"):
     with col1:
         num_courts = st.number_input("Number of physical courts", 1, 6, 2)
     with col2:
-        preferred_pools = st.number_input("Preferred number of pools", 2, 8, 3)
+        num_pools = st.number_input("Number of pools", 2, 8, 3)
     with col3:
-        preferred_size = st.selectbox("Preferred players per pool", [4, 5, 6], 0)
+        players_per_pool = st.selectbox("Players per pool", [4, 5, 6], 0)
 
-    col4, col5, col6 = st.columns(3)
+    col4, col5 = st.columns(2)
     with col4:
-        movers = st.selectbox("Default movers up/down", [1, 2], 0)
+        play_to = st.number_input("Play to", 7, 21, 9)
     with col5:
-        num_cycles = st.number_input("Number of rounds", 1, 6, 3)
-    with col6:
-        play_to = st.number_input("Play to (normal pools)", 7, 21, 9)
-
-    play_to_5 = st.number_input("Play to for 5-player pools", 7, 21, 7)
+        st.caption("Movers defaults: 4-player → 1, 5-player → 2, 6-player → 3")
 
     st.header("2. Enter Players")
     st.caption("Format: Name, DUPR. Returning players keep Overall Ladder order. New players inserted by DUPR.")
@@ -571,7 +572,7 @@ Skyler, 3.9"""
                 player_notes[np["name"]] = f"New Player (DUPR {np['dupr']})"
 
             players = final_players
-            sizes = smart_distribute(len(players), preferred_pools, preferred_size)
+            sizes = smart_distribute(len(players), num_pools, players_per_pool)
 
             if not sizes:
                 st.error("Could not create valid pools.")
@@ -586,7 +587,7 @@ Skyler, 3.9"""
                     pname = f"Pool {chr(65 + i)}"
                     pools[pname] = players[idx:idx + size]
                     pool_names.append(pname)
-                    pool_movers[pname] = movers
+                    pool_movers[pname] = default_movers_for_size(size)
                     idx += size
 
                 size_str = " + ".join(str(s) for s in sizes)
@@ -597,12 +598,10 @@ Skyler, 3.9"""
 
                 scores = {}
                 for pname, schedule in schedules.items():
-                    pool_size = len(pools[pname])
-                    target = play_to_5 if pool_size >= 5 else play_to
                     for r_idx, rnd in enumerate(schedule):
                         for m_idx, match in enumerate([x for x in rnd if is_match(x)]):
                             key = f"{pname}_r{r_idx}_m{m_idx}"
-                            scores[key] = (target, target - 1) if random.random() < 0.5 else (target - 1, target)
+                            scores[key] = (play_to, play_to - 1) if random.random() < 0.5 else (play_to - 1, play_to)
 
                 cumulative = {p["name"]: {"diff": 0, "wins": 0} for p in players}
                 initial_ranks = {p["name"]: i + 1 for i, p in enumerate(players)}
@@ -633,12 +632,9 @@ Skyler, 3.9"""
                 st.session_state.scores = scores
                 st.session_state.num_courts = num_courts
                 st.session_state.num_pools = actual_pools
-                st.session_state.players_per_pool = preferred_size
-                st.session_state.movers = movers
+                st.session_state.players_per_pool = players_per_pool
                 st.session_state.pool_movers = pool_movers
-                st.session_state.num_cycles = num_cycles
                 st.session_state.play_to = play_to
-                st.session_state.play_to_5 = play_to_5
                 st.session_state.use_shared_courts = use_shared
                 st.session_state.created = True
                 st.session_state.cycle = 1
@@ -654,6 +650,7 @@ Skyler, 3.9"""
                 st.session_state.locked_matches = {}
                 st.session_state.player_notes = player_notes
                 st.session_state.full_score_history = []
+                st.session_state.final_done = False
                 save_state()
                 st.rerun()
 
@@ -665,17 +662,14 @@ if st.session_state.get("created"):
     court_names = st.session_state.court_names
     schedules = st.session_state.schedules
     num_pools = st.session_state.num_pools
-    movers = st.session_state.movers
-    pool_movers = st.session_state.get("pool_movers", {p: movers for p in pool_names})
-    num_cycles = st.session_state.num_cycles
+    pool_movers = st.session_state.get("pool_movers", {})
     play_to = st.session_state.play_to
-    play_to_5 = st.session_state.get("play_to_5", 7)
     use_shared = st.session_state.use_shared_courts
     player_notes = st.session_state.get("player_notes", {})
 
-    st.caption(f"Courts: {st.session_state.num_courts} | Pools: {num_pools} | Rounds: {num_cycles} | Play to: {play_to} (5-player: {play_to_5})")
+    st.caption(f"Courts: {st.session_state.num_courts} | Pools: {num_pools} | Play to: {play_to}")
 
-    # Score History toggle
+    # Score History
     if st.button("📜 Show / Hide Score History"):
         st.session_state.show_score_history = not st.session_state.show_score_history
 
@@ -684,8 +678,14 @@ if st.session_state.get("created"):
         if st.session_state.full_score_history:
             for entry in st.session_state.full_score_history:
                 st.markdown(f"**{entry['title']}**")
-                for line in entry.get("lines", []):
-                    st.write(line)
+                for i, line in enumerate(entry.get("lines", [])):
+                    cols = st.columns([6, 1])
+                    with cols[0]:
+                        st.write(line)
+                    with cols[1]:
+                        if is_admin and st.button("Edit", key=f"hist_edit_{entry['title']}_{i}"):
+                            # For simplicity we just show a message - full re-edit would require more complex key tracking
+                            st.info("To edit this score, go back to the Court Board of that round if still available, or contact admin.")
         else:
             st.caption("No scores recorded yet.")
 
@@ -698,15 +698,12 @@ if st.session_state.get("created"):
                 with cols[i % len(cols)]:
                     st.markdown(f"**{pname}** ({len(plist)} players)")
                     if is_admin:
-                        current_m = pool_movers.get(pname, movers)
-                        new_m = st.selectbox(f"Movers for {pname}", [1, 2], index=0 if current_m == 1 else 1, key=f"movers_{pname}")
+                        current_m = pool_movers.get(pname, 1)
+                        new_m = st.selectbox(f"Movers {pname}", [1, 2, 3], index=min(current_m-1, 2), key=f"movers_{pname}")
                         if new_m != current_m:
                             st.session_state.pool_movers[pname] = new_m
                             save_state()
-                    data = []
-                    for p in plist:
-                        note = player_notes.get(p["name"], "")
-                        data.append({"Player": p["name"], "DUPR": p["dupr"], "Note": note})
+                    data = [{"Player": p["name"], "DUPR": p["dupr"], "Note": player_notes.get(p["name"], "")} for p in plist]
                     st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
         elif entry["type"] == "rankings":
             cols = st.columns(min(len(entry["data"]), 4))
@@ -731,9 +728,7 @@ if st.session_state.get("created"):
             if status:
                 t1, t2 = status["match"]
                 key = status["key"]
-                pool_size = len(pools.get(status["pool"], []))
-                target = play_to_5 if pool_size >= 5 else play_to
-                current = st.session_state.scores.get(key, (target, target - 1))
+                current = st.session_state.scores.get(key, (play_to, play_to - 1))
 
                 st.subheader(f"{court} | {status['pool']} Match {status['round']}")
                 col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
@@ -758,7 +753,7 @@ if st.session_state.get("created"):
                                 st.session_state.scores[key] = (s1, s2)
                                 st.session_state.locked_matches[key] = True
                                 st.session_state.completed_matches.append(status)
-                                # add to history
+
                                 line = f"{status['pool']} Match {status['round']}: {t1[0]} & {t1[1]} vs {t2[0]} & {t2[1]} → {s1}-{s2}"
                                 if not st.session_state.full_score_history or st.session_state.full_score_history[-1]["title"] != f"Round {st.session_state.cycle} Scores":
                                     st.session_state.full_score_history.append({"title": f"Round {st.session_state.cycle} Scores", "lines": []})
@@ -815,7 +810,7 @@ if st.session_state.get("created"):
                     ranking.sort(key=lambda x: (x["diff"], x["wins"]), reverse=True)
                     standings[pname] = ranking
 
-                    move_n = pool_movers.get(pname, movers)
+                    move_n = pool_movers.get(pname, 1)
                     n = len(ranking)
                     move_n = min(move_n, n // 2) if n >= 2 else 0
                     ties = []
@@ -882,43 +877,55 @@ if st.session_state.get("created"):
             st.markdown("---")
             col_a, col_b = st.columns(2)
             with col_a:
-                if st.session_state.cycle < num_cycles and not has_conflict:
+                if not has_conflict:
                     if st.button("Apply Movement & Start Next Round", type="primary"):
                         for pname, ranking in st.session_state.standings.items():
                             for r in ranking:
                                 st.session_state.cumulative[r["name"]]["diff"] += r["diff"]
                                 st.session_state.cumulative[r["name"]]["wins"] += r["wins"]
+
                         st.session_state.assignment_history.append({
                             "title": f"Rankings after Round {st.session_state.cycle}",
                             "type": "rankings",
                             "data": st.session_state.standings
                         })
 
+                        # Balanced movement (preserve sizes as much as possible)
                         final_rankings = st.session_state.standings
                         new_pools = {name: [] for name in pool_names}
                         display_data = {name: [] for name in pool_names}
+
+                        # First determine who moves up and down between each boundary
                         movers_up = {name: [] for name in pool_names}
                         movers_down = {name: [] for name in pool_names}
 
                         for p_idx, pname in enumerate(pool_names):
                             ranking = final_rankings[pname]
-                            move_n = pool_movers.get(pname, movers)
-                            up_list = ranking[:move_n] if p_idx > 0 else []
-                            down_list = ranking[-move_n:] if p_idx < num_pools - 1 else []
-                            if f"{pname}_top (move up)" in st.session_state.skinny_results:
-                                selected = st.session_state.skinny_results[f"{pname}_top (move up)"]
-                                up_list = [r for r in ranking if r["name"] in selected][:move_n]
-                            if f"{pname}_bottom (move down)" in st.session_state.skinny_results:
-                                selected = st.session_state.skinny_results[f"{pname}_bottom (move down)"]
-                                down_list = [r for r in ranking if r["name"] in selected][-move_n:]
-                            if p_idx > 0: movers_up[pname] = up_list
-                            if p_idx < num_pools - 1: movers_down[pname] = down_list
+                            move_n = pool_movers.get(pname, 1)
+                            move_n = min(move_n, len(ranking) // 2) if len(ranking) >= 2 else 0
 
+                            if p_idx > 0 and move_n > 0:
+                                up_list = ranking[:move_n]
+                                if f"{pname}_top (move up)" in st.session_state.skinny_results:
+                                    selected = st.session_state.skinny_results[f"{pname}_top (move up)"]
+                                    up_list = [r for r in ranking if r["name"] in selected][:move_n]
+                                movers_up[pname] = up_list
+
+                            if p_idx < num_pools - 1 and move_n > 0:
+                                down_list = ranking[-move_n:]
+                                if f"{pname}_bottom (move down)" in st.session_state.skinny_results:
+                                    selected = st.session_state.skinny_results[f"{pname}_bottom (move down)"]
+                                    down_list = [r for r in ranking if r["name"] in selected][-move_n:]
+                                movers_down[pname] = down_list
+
+                        # Now build new pools keeping sizes balanced
                         for p_idx, pname in enumerate(pool_names):
                             ranking = final_rankings[pname]
-                            staying = [r for r in ranking if not any(r["name"] == m["name"] for m in movers_up[pname] + movers_down[pname])]
-                            incoming_down = movers_down.get(pool_names[p_idx-1], []) if p_idx > 0 else []
-                            incoming_up = movers_up.get(pool_names[p_idx+1], []) if p_idx < num_pools-1 else []
+                            staying = [r for r in ranking if not any(r["name"] == m["name"] for m in movers_up.get(pname, []) + movers_down.get(pname, []))]
+
+                            incoming_down = movers_down.get(pool_names[p_idx - 1], []) if p_idx > 0 else []
+                            incoming_up = movers_up.get(pool_names[p_idx + 1], []) if p_idx < num_pools - 1 else []
+
                             ordered = []
                             for r in incoming_down:
                                 ordered.append({"Player": r["name"], "Note": f"(down from {pool_names[p_idx-1]})"})
@@ -949,12 +956,10 @@ if st.session_state.get("created"):
                         new_schedules = {p: generate_schedule(pl) for p, pl in new_pools.items()}
                         new_scores = {}
                         for pname, schedule in new_schedules.items():
-                            pool_size = len(new_pools[pname])
-                            target = play_to_5 if pool_size >= 5 else play_to
                             for r_idx, rnd in enumerate(schedule):
                                 for m_idx, match in enumerate([x for x in rnd if is_match(x)]):
                                     key = f"{pname}_r{r_idx}_m{m_idx}"
-                                    new_scores[key] = (target, target-1) if random.random() < 0.5 else (target-1, target)
+                                    new_scores[key] = (play_to, play_to-1) if random.random() < 0.5 else (play_to-1, play_to)
                         st.session_state.scores.update(new_scores)
 
                         match_queue = []
