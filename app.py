@@ -58,18 +58,29 @@ def parse_notes(notes):
         pass
     return diff, wins, sessions
 
+def assign_shared_ranks(sorted_items, key_func):
+    """Assign ranks with ties sharing the same rank number."""
+    if not sorted_items:
+        return []
+    result = []
+    current_rank = 1
+    prev_key = None
+    for i, item in enumerate(sorted_items):
+        key = key_func(item)
+        if prev_key is not None and key != prev_key:
+            current_rank = i + 1
+        result.append((current_rank, item))
+        prev_key = key
+    return result
+
 def load_overall_ladder():
     try:
         result = supabase.table("master_ladder").select("*").execute()
         data = result.data if result.data else []
         def sort_key(row):
             diff, wins, sessions = parse_notes(row.get("notes", ""))
-            avg = diff / sessions if sessions > 0 else 0
-            dupr = float(row.get("dupr") or 0)
-            return (-diff, -wins, -avg, -dupr)
+            return (-diff, -wins, -sessions)
         data.sort(key=sort_key)
-        for i, row in enumerate(data):
-            row["current_rank"] = i + 1
         return data
     except Exception as e:
         st.warning(f"Could not load Overall Ladder: {e}")
@@ -81,12 +92,8 @@ def load_last_season_ladder():
         data = result.data if result.data else []
         def sort_key(row):
             diff, wins, sessions = parse_notes(row.get("notes", ""))
-            avg = diff / sessions if sessions > 0 else 0
-            dupr = float(row.get("dupr") or 0)
-            return (-diff, -wins, -avg, -dupr)
+            return (-diff, -wins, -sessions)
         data.sort(key=sort_key)
-        for i, row in enumerate(data):
-            row["current_rank"] = i + 1
         return data
     except Exception as e:
         st.warning(f"Could not load Last Season Ladder: {e}")
@@ -119,7 +126,7 @@ def archive_and_clear_ladder():
                 rows.append({
                     "player_name": p["player_name"],
                     "dupr": float(p.get("dupr") or 0),
-                    "current_rank": p["current_rank"],
+                    "current_rank": p.get("current_rank", 0),
                     "last_played": p.get("last_played", str(date.today())),
                     "notes": p.get("notes", "")
                 })
@@ -162,12 +169,7 @@ def update_overall_ladder_from_session(cumulative, player_duprs=None):
                 }
         sorted_list = sorted(
             current_dict.values(),
-            key=lambda x: (
-                -x["diff"],
-                -x["wins"],
-                -(x["diff"] / x["sessions"] if x["sessions"] > 0 else 0),
-                -x.get("dupr", 0)
-            )
+            key=lambda x: (-x["diff"], -x["wins"], -x["sessions"])
         )
         save_overall_ladder(sorted_list)
         return sorted_list
@@ -183,16 +185,13 @@ def load_hof():
             champs = row.get("championships", 0)
             notes = row.get("notes", "")
             diff = 0
-            dupr = 0.0
             try:
                 for part in notes.split("|"):
                     if part.startswith("diff:"):
                         diff = int(part.split(":")[1])
-                    if part.startswith("dupr:"):
-                        dupr = float(part.split(":")[1])
             except:
                 pass
-            return (-champs, -diff, -dupr)
+            return (-champs, -diff)
         data.sort(key=sort_key)
         return data
     except Exception as e:
@@ -211,26 +210,18 @@ def add_to_hall_of_fame(player_name, season_str, total_diff=0, dupr=0):
             if season_str not in seasons:
                 seasons.append(season_str)
             new_seasons = ", ".join(seasons)
-
-            # Keep the higher total_diff and the real dupr
             old_diff = 0
-            old_dupr = 0.0
             try:
                 for part in (row.get("notes") or "").split("|"):
                     if part.startswith("diff:"):
                         old_diff = int(part.split(":")[1])
-                    if part.startswith("dupr:"):
-                        old_dupr = float(part.split(":")[1])
             except:
                 pass
-
             final_diff = max(old_diff, total_diff)
-            final_dupr = dupr if dupr > 0 else old_dupr
-
             supabase.table("hall_of_fame").update({
                 "championships": current + 1,
                 "last_season": new_seasons,
-                "notes": f"diff:{final_diff}|dupr:{final_dupr}"
+                "notes": f"diff:{final_diff}|dupr:{dupr}"
             }).eq("player_name", player_name).execute()
         else:
             supabase.table("hall_of_fame").insert({
@@ -442,8 +433,6 @@ if "skinny_results" not in st.session_state:
     st.session_state.skinny_results = {}
 if "court_queues" not in st.session_state:
     st.session_state.court_queues = {}
-if "show_reset_ladder" not in st.session_state:
-    st.session_state.show_reset_ladder = False
 if "show_ladder_page" not in st.session_state:
     st.session_state.show_ladder_page = False
 if "show_hof_page" not in st.session_state:
@@ -468,6 +457,10 @@ if "show_change_admin_pwd" not in st.session_state:
     st.session_state.show_change_admin_pwd = False
 if "show_change_edit_pwd" not in st.session_state:
     st.session_state.show_change_edit_pwd = False
+if "show_edit_overall" not in st.session_state:
+    st.session_state.show_edit_overall = False
+if "show_edit_hof" not in st.session_state:
+    st.session_state.show_edit_hof = False
 
 # ---------- Top Bar ----------
 c1, c2, c3, c4, c5, c6, c7 = st.columns([1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3])
@@ -485,10 +478,12 @@ with c1:
 with c2:
     if st.button("📊 Overall Ladder"):
         st.session_state.show_ladder_page = not st.session_state.show_ladder_page
+        st.session_state.show_edit_overall = False
 
 with c3:
     if st.button("🏆 Hall of Fame"):
         st.session_state.show_hof_page = not st.session_state.show_hof_page
+        st.session_state.show_edit_hof = False
 
 with c4:
     if st.session_state.admin_unlocked:
@@ -572,7 +567,6 @@ if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
                 if ladder:
                     champion = ladder[0]["player_name"]
                     total_diff = 0
-                    # Stronger DUPR retrieval
                     dupr = float(ladder[0].get("dupr") or 0)
                     try:
                         for part in (ladder[0].get("notes") or "").split("|"):
@@ -580,19 +574,16 @@ if st.session_state.get("show_end_season") and st.session_state.admin_unlocked:
                                 total_diff = int(part.split(":")[1])
                     except:
                         pass
-
-                    # Extra safety: if DUPR is still 0, try to find it from the current session players
                     if dupr == 0 and st.session_state.get("players"):
                         for p in st.session_state.players:
                             if p["name"] == champion:
                                 dupr = float(p.get("dupr") or 0)
                                 break
-
                     add_to_hall_of_fame(champion, season_str, total_diff, dupr)
                     success = archive_and_clear_ladder()
                     if success:
                         st.session_state.season_start = str(date.today())
-                        st.success(f"✅ Season ended! **{champion}** (DUPR {dupr}) added to Hall of Fame.")
+                        st.success(f"✅ Season ended! **{champion}** added to Hall of Fame.")
                     else:
                         st.error("Failed to archive ladder.")
                 else:
@@ -627,40 +618,56 @@ if st.session_state.show_ladder_page:
     season = month_range_str(st.session_state.get("season_start"))
     st.header(f"📊 Overall Ladder – Top 10 ({season})")
 
+    # Top buttons
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.session_state.admin_unlocked:
+            if st.button("✏️ Edit Overall Ladder"):
+                st.session_state.show_edit_overall = not st.session_state.show_edit_overall
+    with col_b:
+        if st.button("View Last Season Overall Ladder"):
+            st.session_state.show_last_season = True
+            st.rerun()
+
     with st.expander("ℹ️ How the Overall Ladder works"):
         st.markdown("""
 **Ranking order (highest to lowest):**
-1. **Total +/−** (point differential across all sessions)
+1. **Total +/−**
 2. If tied → **Wins**
-3. If tied → **Average +/− per session**
-4. If still tied → **DUPR** (higher is better)
+3. If still tied → **Sessions** (more sessions is better)
 
-Players keep their position from week to week. New players are inserted by their DUPR.
+If two or more players have exactly the same Total +/−, Wins and Sessions, they share the same rank (e.g. both are shown as 5th).
 """)
 
     ladder = get_top10_ladder()
     if ladder:
+        ranked = assign_shared_ranks(ladder, key_func=lambda p: parse_notes(p.get("notes", "")))
         rows = []
-        for i, p in enumerate(ladder):
-            medal = "🥇 " if i == 0 else "🥈 " if i == 1 else "🥉 " if i == 2 else ""
+        for rank, p in ranked:
+            medal = "🥇 " if rank == 1 else "🥈 " if rank == 2 else "🥉 " if rank == 3 else ""
             diff, wins, sessions = parse_notes(p.get("notes", ""))
-            avg = round(diff / sessions, 2) if sessions > 0 else 0
+            # Check if this rank is shared
+            same_rank_count = sum(1 for r, _ in ranked if r == rank)
+            rank_display = f"{medal}{rank}"
+            if same_rank_count > 1:
+                rank_display += f" (=)"
             rows.append({
-                "Rank": f"{medal}{p['current_rank']}",
+                "Rank": rank_display,
                 "Player": p["player_name"],
-                "DUPR": p.get("dupr") or 0,
                 "Total +/−": diff,
                 "Wins": wins,
-                "Sessions": sessions,
-                "Avg +/−": avg
+                "Sessions": sessions
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        if any(sum(1 for r, _ in ranked if r == rank) > 1 for rank, _ in ranked):
+            st.caption("(=) means players are equal and share the same rank.")
     else:
         st.info("Overall Ladder is empty.")
 
-    if st.session_state.admin_unlocked and ladder:
+    # Edit Overall Ladder (shown only when button clicked)
+    if st.session_state.show_edit_overall and st.session_state.admin_unlocked and ladder:
         st.markdown("---")
-        st.subheader("Admin: Edit Overall Ladder Player")
+        st.subheader("Edit Overall Ladder Player")
         names = [p["player_name"] for p in ladder]
         selected = st.selectbox("Select player", [""] + names, key="ol_edit_select")
         if selected:
@@ -668,7 +675,6 @@ Players keep their position from week to week. New players are inserted by their
             diff, wins, sessions = parse_notes(player.get("notes", ""))
             with st.form("edit_overall_form"):
                 new_name = st.text_input("Player Name", value=player["player_name"])
-                new_dupr = st.number_input("DUPR", value=float(player.get("dupr") or 0), step=0.1, format="%.1f")
                 new_diff = st.number_input("Total +/−", value=diff)
                 new_wins = st.number_input("Wins", value=wins, min_value=0)
                 new_sessions = st.number_input("Sessions", value=sessions, min_value=0)
@@ -676,7 +682,6 @@ Players keep their position from week to week. New players are inserted by their
                     try:
                         supabase.table("master_ladder").update({
                             "player_name": new_name,
-                            "dupr": new_dupr,
                             "notes": f"diff:{new_diff}|wins:{new_wins}|sessions:{new_sessions}"
                         }).eq("player_name", selected).execute()
                         st.success("Player updated")
@@ -684,12 +689,9 @@ Players keep their position from week to week. New players are inserted by their
                     except Exception as e:
                         st.error(str(e))
 
-    if st.button("View Last Season Overall Ladder"):
-        st.session_state.show_last_season = True
-        st.rerun()
-    
     if st.button("Close Overall Ladder"):
         st.session_state.show_ladder_page = False
+        st.session_state.show_edit_overall = False
         st.rerun()
     st.markdown("---")
 
@@ -697,19 +699,21 @@ if st.session_state.get("show_last_season"):
     st.header("📊 Last Season Overall Ladder")
     last = load_last_season_ladder()
     if last:
+        ranked = assign_shared_ranks(last, key_func=lambda p: parse_notes(p.get("notes", "")))
         rows = []
-        for i, p in enumerate(last):
-            medal = "🥇 " if i == 0 else "🥈 " if i == 1 else "🥉 " if i == 2 else ""
+        for rank, p in ranked:
+            medal = "🥇 " if rank == 1 else "🥈 " if rank == 2 else "🥉 " if rank == 3 else ""
             diff, wins, sessions = parse_notes(p.get("notes", ""))
-            avg = round(diff / sessions, 2) if sessions > 0 else 0
+            same_rank_count = sum(1 for r, _ in ranked if r == rank)
+            rank_display = f"{medal}{rank}"
+            if same_rank_count > 1:
+                rank_display += " (=)"
             rows.append({
-                "Rank": f"{medal}{p['current_rank']}",
+                "Rank": rank_display,
                 "Player": p["player_name"],
-                "DUPR": p.get("dupr") or 0,
                 "Total +/−": diff,
                 "Wins": wins,
-                "Sessions": sessions,
-                "Avg +/−": avg
+                "Sessions": sessions
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     else:
@@ -723,6 +727,11 @@ if st.session_state.get("show_last_season"):
 if st.session_state.show_hof_page:
     st.header("🏆 Hall of Fame")
 
+    # Top buttons
+    if st.session_state.admin_unlocked:
+        if st.button("✏️ Edit Hall of Fame"):
+            st.session_state.show_edit_hof = not st.session_state.show_edit_hof
+
     with st.expander("ℹ️ How the Hall of Fame works"):
         st.markdown("""
 **Only season champions are added** (the #1 player when you press End Season).
@@ -730,64 +739,74 @@ if st.session_state.show_hof_page:
 **Ranking order:**
 1. **Championships** (number of seasons won)
 2. If tied → **Lifetime Total +/−**
-3. If still tied → **DUPR** (higher is better)
 
-The Total +/− shown is the player’s lifetime cumulative point differential across all seasons.
+If two or more players have exactly the same Championships and Total +/−, they share the same rank (e.g. both are shown as 5th).
 """)
 
     hof = load_hof()
     if hof:
+        def hof_key(p):
+            champs = p.get("championships", 0)
+            diff = 0
+            try:
+                for part in (p.get("notes") or "").split("|"):
+                    if part.startswith("diff:"):
+                        diff = int(part.split(":")[1])
+            except:
+                pass
+            return (-champs, -diff)
+
+        ranked = assign_shared_ranks(hof, key_func=hof_key)
         rows = []
-        for i, p in enumerate(hof):
-            medal = "🥇 " if i == 0 else "🥈 " if i == 1 else "🥉 " if i == 2 else ""
+        for rank, p in ranked:
+            medal = "🥇 " if rank == 1 else "🥈 " if rank == 2 else "🥉 " if rank == 3 else ""
             seasons = clean_season(p.get("last_season", "-"))
             total_diff = 0
-            dupr = 0.0
             try:
                 for part in (p.get("notes") or "").split("|"):
                     if part.startswith("diff:"):
                         total_diff = int(part.split(":")[1])
-                    if part.startswith("dupr:"):
-                        dupr = float(part.split(":")[1])
             except:
                 pass
+            same_rank_count = sum(1 for r, _ in ranked if r == rank)
+            rank_display = f"{medal}{rank}"
+            if same_rank_count > 1:
+                rank_display += " (=)"
             rows.append({
-                "Rank": f"{medal}{i+1}",
+                "Rank": rank_display,
                 "Player": p["player_name"],
-                "DUPR": dupr,
                 "Championships": p.get("championships", 0),
                 "Total +/−": total_diff,
                 "Season": seasons
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        if any(sum(1 for r, _ in ranked if r == rank) > 1 for rank, _ in ranked):
+            st.caption("(=) means players are equal and share the same rank.")
     else:
         st.info("Hall of Fame is empty. Only season winners appear here.")
 
-    if st.session_state.admin_unlocked:
+    # Edit Hall of Fame (shown only when button clicked)
+    if st.session_state.show_edit_hof and st.session_state.admin_unlocked:
         st.markdown("---")
-        st.subheader("Admin Controls")
+        st.subheader("Edit Hall of Fame Player")
         if st.button("Reset Hall of Fame"):
             st.session_state.show_reset_hof = True
             st.rerun()
-        
+
         hof_names = [p["player_name"] for p in hof] if hof else []
         if hof_names:
             selected = st.selectbox("Select player to edit", [""] + hof_names, key="hof_edit_select")
             if selected:
                 player = next(p for p in hof if p["player_name"] == selected)
                 total_diff = 0
-                dupr = 0.0
                 try:
                     for part in (player.get("notes") or "").split("|"):
                         if part.startswith("diff:"):
                             total_diff = int(part.split(":")[1])
-                        if part.startswith("dupr:"):
-                            dupr = float(part.split(":")[1])
                 except:
                     pass
                 with st.form("edit_hof_form"):
                     new_name = st.text_input("Player Name", value=player["player_name"])
-                    new_dupr = st.number_input("DUPR", value=dupr, step=0.1, format="%.1f")
                     new_champs = st.number_input("Championships", value=player.get("championships", 1), min_value=0)
                     new_diff = st.number_input("Total +/− (lifetime)", value=total_diff)
                     new_season = st.text_input("Season(s)", value=player.get("last_season", ""))
@@ -797,7 +816,7 @@ The Total +/− shown is the player’s lifetime cumulative point differential a
                                 "player_name": new_name,
                                 "championships": new_champs,
                                 "last_season": new_season,
-                                "notes": f"diff:{new_diff}|dupr:{new_dupr}"
+                                "notes": f"diff:{new_diff}"
                             }).eq("player_name", selected).execute()
                             st.success("Hall of Fame player updated")
                             st.rerun()
@@ -808,6 +827,7 @@ The Total +/− shown is the player’s lifetime cumulative point differential a
 
     if st.button("Close Hall of Fame"):
         st.session_state.show_hof_page = False
+        st.session_state.show_edit_hof = False
         st.rerun()
     st.markdown("---")
 
@@ -860,7 +880,7 @@ Skyler, 3.9"""
 
             overall = load_overall_ladder()
             overall_names = [p["player_name"] for p in overall]
-            overall_rank = {p["player_name"]: p["current_rank"] for p in overall}
+            overall_rank = {p["player_name"]: idx+1 for idx, p in enumerate(overall)}
 
             returning = [p for p in players if p["name"] in overall_names]
             new_players = [p for p in players if p["name"] not in overall_names]
