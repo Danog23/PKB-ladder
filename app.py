@@ -1070,39 +1070,115 @@ if st.session_state.get("created"):
             st.caption("No scores recorded yet.")
 
     for entry in st.session_state.get("assignment_history", []):
-        centered_title(entry["title"])
-        if entry["type"] == "groups":
-            cols = st.columns(min(len(entry["data"]), 4))
-            for i, (pname, plist) in enumerate(entry["data"].items()):
-                with cols[i % len(cols)]:
-                    st.markdown(f"<h4 style='text-align:center'>{pname} ({len(plist)})</h4>", unsafe_allow_html=True)
-                    if is_admin:
-                        current_m = pool_movers.get(pname, 1)
-                        new_m = st.selectbox(f"Movers {pname}", [1, 2, 3], index=min(current_m-1, 2), key=f"movers_{pname}")
-                        if new_m != current_m:
-                            st.session_state.pool_movers[pname] = new_m
-                            save_state()
-                    data = [{"Player": p["name"], "DUPR": p["dupr"], "Note": player_notes.get(p["name"], "")} for p in plist]
-                    st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
-        elif entry["type"] == "rankings":
-            cols = st.columns(min(len(entry["data"]), 4))
-            for i, (pname, ranking) in enumerate(entry["data"].items()):
-                with cols[i % len(cols)]:
-                    st.markdown(f"<h4 style='text-align:center'>{pname}</h4>", unsafe_allow_html=True)
-                    st.dataframe(pd.DataFrame([{"#": j+1, "Player": r["name"], "+/−": r["diff"], "W": r["wins"]} for j, r in enumerate(ranking)]), hide_index=True, use_container_width=True)
-        elif entry["type"] == "new_groups":
-            cols = st.columns(min(len(entry["data"]), 4))
-            for i, (pname, rows) in enumerate(entry["data"].items()):
-                with cols[i % len(cols)]:
-                    st.markdown(f"<h4 style='text-align:center'>{pname}</h4>", unsafe_allow_html=True)
-                    st.dataframe(pd.DataFrame([{"Player": r["Player"], "Note": r.get("Note", "")} for r in rows]), hide_index=True, use_container_width=True)
+    centered_title(entry["title"])
+    if entry["type"] == "groups":
+        cols = st.columns(min(len(entry["data"]), 4))
+        for i, (pname, plist) in enumerate(entry["data"].items()):
+            with cols[i % len(cols)]:
+                st.markdown(f"<h4 style='text-align:center'>{pname} ({len(plist)})</h4>", unsafe_allow_html=True)
+                if is_admin:
+                    current_m = pool_movers.get(pname, 1)
+                    new_m = st.selectbox(f"Movers {pname}", [1, 2, 3], index=min(current_m-1, 2), key=f"movers_{pname}")
+                    if new_m != current_m:
+                        st.session_state.pool_movers[pname] = new_m
+                        save_state()
+                data = [{"Player": p["name"], "DUPR": p["dupr"], "Note": player_notes.get(p["name"], "")} for p in plist]
+                st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
 
-    if not st.session_state.get("final_done"):
-        upcoming = get_upcoming_matches()
-        if upcoming:
+        # --- Manual player move (Admin only, before first round) ---
+        if is_admin and st.session_state.cycle == 1 and not st.session_state.get("standings"):
             st.markdown("---")
-            centered_title("Upcoming Match Schedule")
-            st.dataframe(pd.DataFrame(upcoming), hide_index=True, use_container_width=True)
+            st.subheader("🔧 Move Player Between Pools (Admin)")
+            
+            all_players = []
+            for pname, plist in entry["data"].items():
+                for p in plist:
+                    all_players.append((p["name"], pname))
+            
+            if all_players:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    player_to_move = st.selectbox(
+                        "Select player to move",
+                        [""] + [f"{name} (currently in {pool})" for name, pool in all_players],
+                        key="move_player_select"
+                    )
+                with col2:
+                    target_pool = st.selectbox(
+                        "Move to pool",
+                        [""] + list(entry["data"].keys()),
+                        key="move_target_pool"
+                    )
+                with col3:
+                    st.write("")
+                    st.write("")
+                    if st.button("Move Player", key="do_move_player"):
+                        if player_to_move and target_pool:
+                            real_name = player_to_move.split(" (currently in ")[0]
+                            
+                            moved_player = None
+                            for pname, plist in st.session_state.pools.items():
+                                for p in plist:
+                                    if p["name"] == real_name:
+                                        moved_player = p
+                                        st.session_state.pools[pname] = [x for x in plist if x["name"] != real_name]
+                                        break
+                                if moved_player:
+                                    break
+                            
+                            if moved_player and target_pool in st.session_state.pools:
+                                st.session_state.pools[target_pool].append(moved_player)
+                                
+                                # Update the display
+                                st.session_state.assignment_history[0]["data"] = st.session_state.pools
+                                
+                                # Rebuild schedules
+                                for p in st.session_state.pools:
+                                    st.session_state.schedules[p] = generate_schedule(st.session_state.pools[p])
+                                
+                                # Rebuild match queues
+                                if st.session_state.use_shared_courts:
+                                    st.session_state.match_queue = build_interleaved_queue(
+                                        st.session_state.schedules, 
+                                        st.session_state.pool_names, 
+                                        st.session_state.pools
+                                    )
+                                    for i, court in enumerate(st.session_state.court_names):
+                                        if i < len(st.session_state.match_queue):
+                                            st.session_state.court_status[court] = st.session_state.match_queue[i]
+                                        else:
+                                            st.session_state.court_status[court] = None
+                                    st.session_state.match_queue = st.session_state.match_queue[len(st.session_state.court_names):]
+                                else:
+                                    st.session_state.court_queues = build_court_queues(
+                                        st.session_state.schedules,
+                                        st.session_state.pool_names,
+                                        st.session_state.court_names,
+                                        st.session_state.pools
+                                    )
+                                    for court, q in st.session_state.court_queues.items():
+                                        if q:
+                                            st.session_state.court_status[court] = q[0]
+                                            st.session_state.court_queues[court] = q[1:]
+                                        else:
+                                            st.session_state.court_status[court] = None
+                                
+                                save_state()
+                                st.success(f"Moved {real_name} to {target_pool}")
+                                st.rerun()
+
+    elif entry["type"] == "rankings":
+        cols = st.columns(min(len(entry["data"]), 4))
+        for i, (pname, ranking) in enumerate(entry["data"].items()):
+            with cols[i % len(cols)]:
+                st.markdown(f"<h4 style='text-align:center'>{pname}</h4>", unsafe_allow_html=True)
+                st.dataframe(pd.DataFrame([{"#": j+1, "Player": r["name"], "+/−": r["diff"], "W": r["wins"]} for j, r in enumerate(ranking)]), hide_index=True, use_container_width=True)
+    elif entry["type"] == "new_groups":
+        cols = st.columns(min(len(entry["data"]), 4))
+        for i, (pname, rows) in enumerate(entry["data"].items()):
+            with cols[i % len(cols)]:
+                st.markdown(f"<h4 style='text-align:center'>{pname}</h4>", unsafe_allow_html=True)
+                st.dataframe(pd.DataFrame([{"Player": r["Player"], "Note": r.get("Note", "")} for r in rows]), hide_index=True, use_container_width=True)
 
     # COURT BOARD
     if not st.session_state.get("standings") and not st.session_state.get("final_done"):
