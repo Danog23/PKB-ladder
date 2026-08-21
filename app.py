@@ -302,22 +302,37 @@ def generate_schedule(players):
     return []
 
 def smart_distribute(n_players, preferred_pools, preferred_size):
-    if n_players < 3:
+    if n_players < 4:
         return []
+    
     best = None
+    # We never allow pools smaller than 4
+    min_size = 4
+    max_size = 6
+
     for num_pools in range(max(1, preferred_pools - 1), preferred_pools + 3):
-        if num_pools * 3 > n_players or num_pools * 6 < n_players:
+        if num_pools * min_size > n_players or num_pools * max_size < n_players:
             continue
+            
         base = n_players // num_pools
         rem = n_players % num_pools
         sizes = [base] * num_pools
+        
+        # Put the larger pools at the TOP (beginning of the list)
         for i in range(rem):
-            sizes[-(i + 1)] += 1
-        if all(3 <= s <= 6 for s in sizes):
-            has_six = any(s == 6 for s in sizes)
-            score = (has_six, abs(num_pools - preferred_pools), abs(base - preferred_size))
+            sizes[i] += 1
+            
+        if all(min_size <= s <= max_size for s in sizes):
+            # Prefer distributions closer to preferred_pools and preferred_size
+            # and slightly prefer having larger pools at the top
+            score = (
+                abs(num_pools - preferred_pools),
+                abs(base - preferred_size),
+                -sizes[0]          # prefer larger first pool
+            )
             if best is None or score < best[0]:
                 best = (score, sizes)
+                
     return best[1] if best else []
 
 def default_movers_for_size(size):
